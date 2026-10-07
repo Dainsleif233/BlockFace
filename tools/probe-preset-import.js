@@ -104,5 +104,13 @@ check('底图也一直画着（左上角是底图的黄色块）',
   Math.abs(basePixel[0] - 233) <= 2 && Math.abs(basePixel[1] - 196) <= 2 && Math.abs(basePixel[2] - 106) <= 2,
   '左上角=' + JSON.stringify(basePixel) + ' 期望≈[233,196,106]');
 
+// 5. 再导一次同一份文件：预设不该越堆越多（曾经的老毛病）
+const countBefore = editor.presets.length;
+await store.importPresets(new File([fileText], 'blockface-presets.json', { type: 'application/json' }));
+await sleep(600);
+check('同一份文件重复导入不会越堆越多',
+  editor.presets.length === countBefore && /跳过/.test((editor.notice && editor.notice.message) || ''),
+  countBefore + ' → ' + editor.presets.length + ' / ' + (editor.notice ? editor.notice.message : ''));
+
 const failed = results.filter((r) => !r.pass);
 return { total: results.length, failed: failed.length, results };

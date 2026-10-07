@@ -376,11 +376,16 @@ check('导出的 JSON 能被解析回同样内容',
   reparsed.length === editor.presets.length && reparsed[0].layers.length === 2 && !!reparsed[0].layers[0].skin,
   json.length + ' 字符');
 
+// 导入是"合并"而不是"追加"：同一份文件导多少次都不该越堆越多
+const countBeforeImport = editor.presets.length;
 await store.importPresets(new File([json], 'presets.json', { type: 'application/json' }));
 await sleep(500);
-check('导入后预设数量翻倍', editor.presets.length === (presetsBefore + 1) * 2, 'presets=' + editor.presets.length);
-check('导入不与已有预设重名', new Set(editor.presets.map((p) => p.name)).size === editor.presets.length,
-  editor.presets.map((p) => p.name).join(' / '));
+check('同一份文件导入不会重复添加',
+  editor.presets.length === countBeforeImport && countBeforeImport === presetsBefore + 1,
+  countBeforeImport + ' → ' + editor.presets.length + ' / ' + (editor.notice ? editor.notice.message : ''));
+check('重复导入会明确说是跳过的',
+  !!editor.notice && /跳过/.test(editor.notice.message),
+  editor.notice ? editor.notice.message : 'null');
 
 // 套用 = 用预设里的这组头像替换画布上的头像；底图与画布尺寸一概不动
 const baseIdBefore = editor.baseImageId;
@@ -430,6 +435,34 @@ store.redo();
 await sleep(900);
 check('重做又能把这一组头像放回来', editor.layers.length === 2 && editor.baseImageId === baseIdBefore,
   'layers=' + editor.layers.length + ' base=' + editor.baseImageId);
+
+// 同 id 但内容变了 → 就地更新，仍然不新增
+const mutated = JSON.parse(json);
+mutated.presets[0].layers[0].size = 999;
+await store.importPresets(new File([JSON.stringify(mutated)], 'mutated.json', { type: 'application/json' }));
+await sleep(500);
+check('同 id 内容变了就地更新，而不是新增一条',
+  editor.presets.length === countBeforeImport && editor.presets[0].layers[0].size === 999,
+  'presets=' + editor.presets.length + ' size=' + editor.presets[0].layers[0].size);
+
+// 改名：预设是给人认的。先再存一个，才验得了"撞名自动加序号"
+store.saveCurrentAsPreset();
+await sleep(400);
+check('再存一个预设（用于改名与撞名测试）',
+  editor.presets.length === countBeforeImport + 1,
+  'presets=' + editor.presets.length);
+
+const nameBefore = editor.presets[0].name;
+store.renamePreset(editor.presets[0].id, '  我的常用摆法  ');
+await sleep(200);
+check('预设能改名，首尾空格会被去掉',
+  editor.presets[0].name === '我的常用摆法',
+  nameBefore + ' → ' + editor.presets[0].name);
+store.renamePreset(editor.presets[0].id, editor.presets[1].name);
+await sleep(200);
+check('改名撞上已有名字时自动加序号',
+  editor.presets[0].name !== editor.presets[1].name,
+  editor.presets.map((p) => p.name).join(' / '));
 
 const beforeRemove = editor.presets.length;
 store.removePreset(target.id);

@@ -1,6 +1,6 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import type { SkinOrigin } from '../core/skin/texture';
 import {
   applyPreset,
@@ -10,6 +10,7 @@ import {
   importPresets,
   preloadBuiltins,
   removePreset,
+  renamePreset,
   saveCurrentAsPreset,
   useAccountSkin,
   useBuiltinSkin,
@@ -38,13 +39,66 @@ const accountText = ref('');
 
 const busy = computed(() => editor.busy !== null);
 
-/** 预设列表：缩略图取第一个带皮肤的图层，一眼能认出是哪一组头像 */
+/** 预设列表：最多画三个头像缩略图，多于三个用 +N 标出来，一眼能认出是哪一组 */
 const presetRows = computed(() =>
-  editor.presets.map((preset) => ({
-    ...preset,
-    face: preset.layers.find((layer) => layer.skin)?.skin?.dataUrl ?? null,
-  })),
+  editor.presets.map((preset) => {
+    const faces = preset.layers
+      .filter((layer) => layer.skin)
+      .slice(0, 3)
+      .map((layer) => (layer.skin as { dataUrl: string }).dataUrl);
+    return { ...preset, faces, extra: Math.max(0, preset.layers.length - faces.length) };
+  }),
 );
+
+/** 改名：点铅笔就地编辑，回车提交、Esc 取消、失焦也算提交 */
+const renamingId = ref<string | null>(null);
+const renameText = ref('');
+/**
+ * 这个输入框在 v-for 里，模板 ref 会变成数组、focus() 静默失效（点了铅笔却打不了字），
+ * 所以用函数式 ref 只记住当前正在改名的那一个。
+ */
+let renameInputEl: HTMLInputElement | null = null;
+
+function bindRenameInput(el: unknown): void {
+  renameInputEl = (el as HTMLInputElement | null) ?? null;
+}
+
+async function startRename(id: string, current: string): Promise<void> {
+  renamingId.value = id;
+  renameText.value = current;
+  await nextTick();
+  renameInputEl?.focus();
+  renameInputEl?.select();
+}
+
+function commitRename(): void {
+  if (renamingId.value) renamePreset(renamingId.value, renameText.value);
+  renamingId.value = null;
+}
+
+function cancelRename(): void {
+  renamingId.value = null;
+}
+
+/**
+ * 删除要点两下：预设不在撤销历史里（历史只快照文档），误点一次不该就永久没了。
+ * 第一下把按钮变成"再点一次就删掉"，3 秒没动作自动收回。
+ */
+const armedDeleteId = ref<string | null>(null);
+let armedTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onDeleteClick(id: string): void {
+  if (armedTimer) clearTimeout(armedTimer);
+  if (armedDeleteId.value !== id) {
+    armedDeleteId.value = id;
+    armedTimer = setTimeout(() => {
+      armedDeleteId.value = null;
+    }, 3000);
+    return;
+  }
+  armedDeleteId.value = null;
+  removePreset(id);
+}
 
 function builtinRecord(id: string): (typeof editor.skins)[number] | null {
   return editor.skins.find((s) => s.id === 'builtin-' + id) ?? null;
@@ -235,8 +289,6 @@ async function onDrop(event: DragEvent): Promise<void> {
           </span>
         </div>
 
-        <p class="bf-note">预设存的是这张图上<strong>全部头像</strong>的信息：位置、大小、旋转、不透明度、帽子层、翻转和各自的皮肤。套用会用它们替换画布上的头像，<strong>底图不动</strong>，撤销一次就能退回来。</p>
-
         <button
           class="bf-btn bf-btn--sm preset__save"
           type="button"
@@ -253,25 +305,64 @@ async function onDrop(event: DragEvent): Promise<void> {
             <div class="bf-lay">
               <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR.preset }" aria-hidden="true" />
               <button
+                v-if="renamingId !== preset.id"
                 type="button"
                 class="row__pick"
                 :title="'套用「' + preset.name + '」：' + preset.layers.length + ' 个头像会替换画布上的头像，底图不动（可撤销）'"
                 @click="applyPreset(preset.id)"
               >
-                <span
-                  class="bf-face preset-face"
-                  :class="{ 'preset-face--empty': !preset.face }"
-                  :style="preset.face ? { backgroundImage: 'url(' + preset.face + ')' } : undefined"
-                />
+                <span class="preset__faces" aria-hidden="true">
+                  <span
+                    v-for="(face, index) in preset.faces"
+                    :key="index"
+                    class="bf-face preset-face"
+                    :style="{ backgroundImage: 'url(' + face + ')' }"
+                  />
+                  <span v-if="!preset.faces.length" class="bf-face preset-face preset-face--empty" />
+                  <span v-if="preset.extra" class="preset__extra">+{{ preset.extra }}</span>
+                </span>
                 <span class="bf-lay-n">{{ preset.name }}</span>
               </button>
-              <span class="bf-lay-m">{{ preset.layers.length }} 头像</span>
-              <button class="bf-x" type="button" title="删除预设" aria-label="删除预设" @click="removePreset(preset.id)">
+              <input
+                v-else
+                :ref="bindRenameInput"
+                v-model="renameText"
+                class="preset__name-input"
+                type="text"
+                maxlength="40"
+                aria-label="预设名称"
+                @keydown.enter.prevent="commitRename"
+                @keydown.esc.prevent="cancelRename"
+                @blur="commitRename"
+              />
+              <button
+                class="bf-x bf-x--pen"
+                type="button"
+                title="重命名"
+                aria-label="重命名预设"
+                @click="startRename(preset.id, preset.name)"
+              >
+                <i class="bf-ic bf-ic--pen" aria-hidden="true" />
+              </button>
+              <button
+                class="bf-x"
+                :class="{ 'bf-x--armed': armedDeleteId === preset.id }"
+                type="button"
+                :title="armedDeleteId === preset.id ? '再点一次就删掉' : '删除预设'"
+                :aria-label="armedDeleteId === preset.id ? '确认删除预设' : '删除预设'"
+                @click="onDeleteClick(preset.id)"
+              >
                 <i class="bf-ic bf-ic--x" aria-hidden="true" />
               </button>
             </div>
           </li>
         </ul>
+        <p v-else class="bf-note">还没有预设。摆好头像后点上面的按钮，就能把这一组存下来。</p>
+
+        <p class="bf-note preset__hint">
+          预设存的是这张图上<strong>全部头像</strong>的信息（位置、大小、旋转、不透明度、帽子层和各自的皮肤）。
+          套用会用它们替换画布上的头像，<strong>底图不动</strong>。
+        </p>
       </section>
     </div>
   </aside>
@@ -340,5 +431,19 @@ async function onDrop(event: DragEvent): Promise<void> {
 
 .preset__acts { display: flex; align-items: center; gap: 6px; }
 .preset__save { width: 100%; margin-bottom: 8px; }
+.preset__faces { flex: none; display: flex; align-items: center; gap: 2px; }
+.preset__faces .preset-face { width: 18px; height: 18px; }
+.preset__extra { font: 700 var(--bf-font-size-sm) / 1 var(--bf-mono); color: var(--bf-ink2); }
+.preset__name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  font: 700 var(--bf-font-size-ui) / 1 var(--bf-mono);
+  color: var(--bf-ink);
+  background: var(--bf-white);
+  border: 1px solid var(--bf-ink);
+}
+.preset__hint { margin-top: 9px; }
 .row__pick { display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0; text-align: left; }
 </style>

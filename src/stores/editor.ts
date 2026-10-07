@@ -680,9 +680,9 @@ export function loadPresets(): void {
   }
 }
 
-function uniquePresetName(base: string): string {
+function uniquePresetName(base: string, exceptId?: string): string {
   const name = base.trim().slice(0, 40) || '预设';
-  const taken = new Set(state.presets.map((p) => p.name));
+  const taken = new Set(state.presets.filter((p) => p.id !== exceptId).map((p) => p.name));
   if (!taken.has(name)) return name;
   for (let i = 2; i < 100; i += 1) {
     const candidate = `${name} ${i}`;
@@ -829,6 +829,16 @@ export function removePreset(id: string): void {
   persistPresets();
 }
 
+/** 改名：预设是给人认的，名字得能自己定 */
+export function renamePreset(id: string, name: string): void {
+  const preset = state.presets.find((p) => p.id === id);
+  if (!preset) return;
+  const clean = name.trim().slice(0, 40);
+  if (!clean || clean === preset.name) return;
+  preset.name = uniquePresetName(clean, id);
+  persistPresets();
+}
+
 export function exportPresets(): void {
   if (state.presets.length === 0) {
     notify('warn', '还没有预设可以导出');
@@ -839,21 +849,53 @@ export function exportPresets(): void {
   notify('success', `已导出 ${state.presets.length} 个预设`);
 }
 
+/** 只比头像信息：名字与时间不参与，所以本地改过名也算同一条 */
+function presetContent(preset: Preset): string {
+  return JSON.stringify(preset.layers);
+}
+
+/**
+ * 导入预设。同一份文件反复导入不该越堆越多：
+ * 同 id 且内容一致 → 跳过；同 id 内容变了 → 就地更新（保留本地改过的名字）；
+ * 不同 id 但内容一模一样 → 也当成重复跳过；其余才算新增。
+ */
 export async function importPresets(file: File): Promise<void> {
   state.busy = `导入 ${file.name}`;
   try {
     const incoming = parsePresetFile(await file.text());
-    const ids = new Set(state.presets.map((p) => p.id));
     let added = 0;
+    let updated = 0;
+    let skipped = 0;
     for (const preset of incoming) {
-      if (state.presets.length >= MAX_PRESETS) break;
-      const id = ids.has(preset.id) ? createId('preset') : preset.id;
-      ids.add(id);
-      state.presets.unshift({ ...preset, id, name: uniquePresetName(preset.name) });
+      const index = state.presets.findIndex((p) => p.id === preset.id);
+      if (index >= 0) {
+        if (presetContent(state.presets[index]) === presetContent(preset)) {
+          skipped += 1;
+          continue;
+        }
+        state.presets.splice(index, 1, { ...preset, name: state.presets[index].name });
+        updated += 1;
+        continue;
+      }
+      if (state.presets.some((p) => presetContent(p) === presetContent(preset))) {
+        skipped += 1;
+        continue;
+      }
+      if (state.presets.length >= MAX_PRESETS) {
+        skipped += 1;
+        continue;
+      }
+      state.presets.unshift({ ...preset, name: uniquePresetName(preset.name) });
       added += 1;
     }
-    if (added > 0) persistPresets();
-    notify(added > 0 ? 'success' : 'warn', added > 0 ? `已导入 ${added} 个预设` : '没有可导入的预设');
+
+    if (added > 0 || updated > 0) persistPresets();
+    const parts: string[] = [];
+    if (added > 0) parts.push(`新增 ${added} 个`);
+    if (updated > 0) parts.push(`更新 ${updated} 个`);
+    if (skipped > 0) parts.push(`跳过 ${skipped} 个已存在的`);
+    const tone = added > 0 || updated > 0 ? 'success' : 'warn';
+    notify(tone, parts.length ? `导入完成：${parts.join('，')}` : '文件里没有预设');
   } catch (error) {
     notify('error', error instanceof PresetParseError ? error.message : '预设文件读取失败');
   } finally {
