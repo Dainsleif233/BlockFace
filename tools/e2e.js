@@ -487,11 +487,14 @@ const { composeDocument } = await import('/src/core/render/compose.ts');
 const { canvasToBlob } = await import('/src/core/render/exportImage.ts');
 const out = document.createElement('canvas');
 composeDocument(out, {
-  width: editor.document.width, height: editor.document.height, scale: 2,
+  width: editor.document.width, height: editor.document.height,
   items: editor.layers.map((l) => ({ layer: l, skin: store.getSkin(l.skinId) })).filter((i) => i.skin),
 });
-check('导出画布 = 文档尺寸 × 2', out.width === editor.document.width * 2 && out.height === editor.document.height * 2,
-  out.width + '×' + out.height);
+check('合成画布 = 文档尺寸（导出固定 1 倍）',
+  out.width === editor.document.width && out.height === editor.document.height, out.width + '×' + out.height);
+check('倍率选择已经不在界面上，exportScale 也删干净了',
+  !document.querySelector('select[aria-label="导出倍率"]') && editor.exportScale === undefined,
+  '选择框=' + !!document.querySelector('select[aria-label="导出倍率"]') + ' exportScale=' + editor.exportScale);
 let blobSize = 0;
 try { blobSize = (await canvasToBlob(out)).size; } catch (e) { blobSize = -1; }
 check('导出 PNG 成功且非空', blobSize > 1000, blobSize + ' bytes');
@@ -502,14 +505,14 @@ const soloLayer = editor.layers[0];
 const soloSkin = store.getSkin(soloLayer.skinId);
 const solo = document.createElement('canvas');
 composeDocument(solo, {
-  width: editor.document.width, height: editor.document.height, scale: 2,
+  width: editor.document.width, height: editor.document.height,
   items: [{ layer: soloLayer, skin: soloSkin }],
 });
 const rel = 0.3125;
-const soloHead = renderHeadCanvasRef(soloSkin, { overlay: soloLayer.overlay, pixelSize: Math.round(soloLayer.size * 2) });
+const soloHead = renderHeadCanvasRef(soloSkin, { overlay: soloLayer.overlay, pixelSize: Math.round(soloLayer.size) });
 const soloPixel = Array.from(solo.getContext('2d').getImageData(
-  Math.round((soloLayer.x - soloLayer.size / 2 + soloLayer.size * rel) * 2),
-  Math.round((soloLayer.y - soloLayer.size / 2 + soloLayer.size * rel) * 2), 1, 1).data);
+  Math.round(soloLayer.x - soloLayer.size / 2 + soloLayer.size * rel),
+  Math.round(soloLayer.y - soloLayer.size / 2 + soloLayer.size * rel), 1, 1).data);
 const soloHeadPixel = Array.from(soloHead.getContext('2d').getImageData(
   Math.round(soloHead.width * rel), Math.round(soloHead.height * rel), 1, 1).data);
 check('导出画布的像素 = 离屏头像同点像素（颜色没被底纹混掉）',
@@ -596,6 +599,182 @@ const afterDrag = editor.layers.map((l) => l.id).join(',');
 store.undo();
 await sleep(300);
 check('整次拖动只占一条历史', editor.layers.map((l) => l.id).join(',') === orderBeforeDrag, afterDrag + ' → ' + editor.layers.map((l) => l.id).join(','));
+
+// ============ 10. 滚轮与底图：缩放、旋转、移动、悬浮名称 ============
+// 干净的舞台：1280×800 的底图（左上角一块红，用来看底图是不是真动了）+ 一个头像
+store.clearBaseImage();
+for (const item of [...editor.layers]) store.removeLayer(item.id);
+await sleep(400);
+const wheelBase = document.createElement('canvas');
+wheelBase.width = 1280;
+wheelBase.height = 800;
+const wbx = wheelBase.getContext('2d');
+wbx.fillStyle = '#3d6b4a';
+wbx.fillRect(0, 0, 1280, 800);
+wbx.fillStyle = '#c8402f';
+wbx.fillRect(0, 0, 320, 200);
+const wheelBlob = await new Promise((r) => wheelBase.toBlob(r, 'image/png'));
+await store.setBaseImage(new File([wheelBlob], '滚轮底图.png', { type: 'image/png' }));
+await sleep(700);
+check('底图和画布一样大时躺在 100%、左上对齐',
+  editor.baseView.x === 0 && editor.baseView.y === 0 && editor.baseView.scale === 1,
+  JSON.stringify({ x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale }));
+
+store.addAvatar();
+await sleep(400);
+for (const item of editor.layers) store.updateLayer(item.id, { x: 640, y: 400, size: 200, rotation: 0, opacity: 1 });
+await sleep(400);
+
+const wheelWrap = document.querySelector('.stage__body');
+const wheelRect = document.querySelector('.artboard').getBoundingClientRect();
+const wheelScale = (wheelRect.width - 2) / editor.document.width;
+/** 文档坐标 → 屏幕坐标：滚轮与指针事件都得打在真实位置上 */
+const toScreen = (x, y) => [wheelRect.left + x * wheelScale, wheelRect.top + y * wheelScale];
+const fireWheel = (x, y, deltaY, shift) => {
+  const point = toScreen(x, y);
+  wheelWrap.dispatchEvent(new WheelEvent('wheel', {
+    clientX: point[0], clientY: point[1], deltaY: deltaY, deltaMode: 0,
+    shiftKey: !!shift, bubbles: true, cancelable: true,
+  }));
+};
+const avatar = editor.layers[0];
+const size0 = avatar.size;
+
+fireWheel(avatar.x, avatar.y, -100);
+await sleep(520);
+check('悬停在头像上滚轮往上 = 放大这个头像',
+  editor.layers[0].size === Math.round(size0 * 1.12) && editor.selectedId === editor.layers[0].id,
+  size0 + ' → ' + editor.layers[0].size + '，顺手选中=' + (editor.selectedId === editor.layers[0].id));
+const sizeUp = editor.layers[0].size;
+store.undo();
+await sleep(320);
+check('整段滚轮收成一条历史，撤销一次就回到原尺寸', editor.layers[0].size === size0, sizeUp + ' → ' + editor.layers[0].size);
+store.redo();
+await sleep(320);
+fireWheel(avatar.x, avatar.y, 100);
+await sleep(520);
+check('滚轮往下 = 缩小', Math.abs(editor.layers[0].size - size0) <= 1, editor.layers[0].size + '（原 ' + size0 + '）');
+
+fireWheel(avatar.x, avatar.y, -100, true);
+await sleep(520);
+check('Shift + 滚轮 = 旋转，一格 5 度', editor.layers[0].rotation === 5, 'rotation=' + editor.layers[0].rotation);
+fireWheel(avatar.x, avatar.y, -100, true);
+await sleep(520);
+check('再滚一格 = 10 度', editor.layers[0].rotation === 10, 'rotation=' + editor.layers[0].rotation);
+store.undo();
+await sleep(320);
+store.undo();
+await sleep(320);
+check('两格滚轮 = 两条历史，撤销两次回到 0 度', editor.layers[0].rotation === 0, 'rotation=' + editor.layers[0].rotation);
+
+const anchor = { x: 200, y: 150 };
+const viewBeforeWheel = { x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale };
+fireWheel(anchor.x, anchor.y, -100);
+await sleep(520);
+const relOf = (view, point) => [(point.x - view.x) / view.scale, (point.y - view.y) / view.scale];
+const relBefore = relOf(viewBeforeWheel, anchor);
+const relAfter = relOf(editor.baseView, anchor);
+check('滚轮打在底图上 = 缩放底图（不是缩放头像）',
+  Math.abs(editor.baseView.scale - 1.12) < 1e-6 && editor.layers[0].size === size0,
+  '底图 scale=' + editor.baseView.scale.toFixed(4) + '，头像尺寸=' + editor.layers[0].size);
+check('底图缩放锚在光标上：光标底下那个像素没跑',
+  Math.abs(relAfter[0] - relBefore[0]) < 1 && Math.abs(relAfter[1] - relBefore[1]) < 1,
+  '光标处的图片坐标 ' + relBefore.map((v) => v.toFixed(1)).join(',') + ' → ' + relAfter.map((v) => v.toFixed(1)).join(','));
+
+const panStart = toScreen(300, 620);
+const panBefore = { x: editor.baseView.x, y: editor.baseView.y };
+const avatarPos = { x: editor.layers[0].x, y: editor.layers[0].y };
+const panPx = (type, cx, cy) => new PointerEvent(type, {
+  pointerId: 31, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true,
+  clientX: cx, clientY: cy, buttons: type === 'pointerup' ? 0 : 1,
+});
+const docPixelAt = (x, y) => {
+  const board = document.querySelector('.artboard__doc');
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  return Array.from(board.getContext('2d').getImageData(Math.round(x * wheelScale * ratio), Math.round(y * wheelScale * ratio), 1, 1).data);
+};
+const redBefore = docPixelAt(10, 10);
+wheelWrap.dispatchEvent(panPx('pointerdown', panStart[0], panStart[1]));
+wheelWrap.dispatchEvent(panPx('pointermove', panStart[0] + 70, panStart[1] + 50));
+wheelWrap.dispatchEvent(panPx('pointerup', panStart[0] + 70, panStart[1] + 50));
+await sleep(400);
+check('拖动底图 = 底图位移，头像原地不动',
+  Math.abs(editor.baseView.x - panBefore.x - 70 / wheelScale) <= 2 &&
+    Math.abs(editor.baseView.y - panBefore.y - 50 / wheelScale) <= 2 &&
+    editor.layers[0].x === avatarPos.x && editor.layers[0].y === avatarPos.y,
+  '底图 (' + editor.baseView.x + ',' + editor.baseView.y + ') 期望≈(' + Math.round(panBefore.x + 70 / wheelScale) + ',' + Math.round(panBefore.y + 50 / wheelScale) + ')，头像 ' + editor.layers[0].x + ',' + editor.layers[0].y);
+const redAfter = docPixelAt(10, 10);
+check('底图真的在画布上挪了（像素为证）',
+  Math.abs(redBefore[0] - 200) < 14 && Math.abs(redBefore[1] - 64) < 14 &&
+    !(Math.abs(redAfter[0] - 200) < 14 && Math.abs(redAfter[1] - 64) < 14),
+  '左上角像素 ' + JSON.stringify(redBefore) + ' → ' + JSON.stringify(redAfter));
+
+const resetBtn = Array.from(document.querySelectorAll('.stage__foot button')).find((b) => b.textContent.trim() === '底图复位');
+check('底图被挪过之后，脚上出现「底图复位」', !!resetBtn, resetBtn ? '有' : '没有');
+if (resetBtn) {
+  resetBtn.click();
+  await sleep(450);
+}
+check('复位 = 回到 100% 且左上对齐',
+  editor.baseView.x === 0 && editor.baseView.y === 0 && editor.baseView.scale === 1,
+  JSON.stringify({ x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale }));
+check('复位之后按钮自己收起来', !document.querySelector('.stage__foot .stage__reset'), document.querySelector('.stage__foot .stage__reset') ? '还在' : '收起了');
+
+const hoverPoint = toScreen(editor.layers[0].x, editor.layers[0].y);
+const movePointer = (cx, cy) => wheelWrap.dispatchEvent(new PointerEvent('pointermove', {
+  pointerId: 32, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true, clientX: cx, clientY: cy,
+}));
+check('没悬停的时候不显示名字条', !document.querySelector('.stage__tip'), document.querySelector('.stage__tip') ? '有' : '没有');
+movePointer(hoverPoint[0], hoverPoint[1]);
+await sleep(280);
+const tipEl = document.querySelector('.stage__tip');
+check('悬浮在头像上会显示它的名称',
+  !!tipEl && tipEl.textContent.trim() === editor.layers[0].name,
+  (tipEl ? tipEl.textContent.trim() : '（没有）') + ' / 期望 ' + editor.layers[0].name);
+const tipRect = tipEl ? tipEl.getBoundingClientRect() : { left: -999, top: -999 };
+check('名字条贴在光标右下方',
+  Math.abs(tipRect.left - (hoverPoint[0] + 14)) <= 2 && Math.abs(tipRect.top - (hoverPoint[1] + 16)) <= 2,
+  'left=' + Math.round(tipRect.left) + ' top=' + Math.round(tipRect.top) + '，光标=' + hoverPoint.map((v) => Math.round(v)).join(','));
+const emptyPoint = toScreen(60, 760);
+movePointer(emptyPoint[0], emptyPoint[1]);
+await sleep(280);
+check('光标挪到没头像的地方，名字条消失', !document.querySelector('.stage__tip'), document.querySelector('.stage__tip') ? '还在' : '消失了');
+
+// ============ 11. 批量添加 ============
+// 真实文件走真实入口：把内置贴图取回来做成 3 个 File，一次性交给「上传皮肤」
+const skinBlobs = [];
+for (const skinName of ['steve.png', 'alex.png', 'steve.png']) {
+  const skinResponse = await fetch('/src/assets/skins/' + skinName);
+  skinBlobs.push(await skinResponse.blob());
+}
+const batchFiles = skinBlobs.map((blob, index) => new File([blob], '批量' + (index + 1) + '.png', { type: 'image/png' }));
+const batchBefore = editor.layers.length;
+const batchResult = await store.useSkinFiles(batchFiles);
+await sleep(500);
+const batchLayers = editor.layers.slice(batchBefore);
+check('一次丢 3 张皮肤 = 3 个新头像',
+  editor.layers.length === batchBefore + 3 && batchResult.ok === 3,
+  '图层 ' + batchBefore + ' → ' + editor.layers.length + '，结果 ok=' + batchResult.ok);
+check('批量加的头像按方阵摆开，不是叠在一起',
+  batchLayers.length === 3 && new Set(batchLayers.map((l) => l.x + ',' + l.y)).size === 3,
+  batchLayers.map((l) => l.x + ',' + l.y).join(' / '));
+check('批量加的头像各有名字', new Set(batchLayers.map((l) => l.name)).size === 3, batchLayers.map((l) => l.name).join(' / '));
+check('批量结果会明说加了几个',
+  /批量添加了 3 个头像/.test(editor.notice ? editor.notice.message : ''),
+  editor.notice ? editor.notice.message : '（没有提示）');
+store.undo();
+await sleep(420);
+check('整批只占一条历史，撤销一次全部退回', editor.layers.length === batchBefore, '图层=' + editor.layers.length);
+store.redo();
+await sleep(420);
+check('重做又把这三个放回来', editor.layers.length === batchBefore + 3, '图层=' + editor.layers.length);
+
+check('名单能按空格/逗号/顿号/换行拆开',
+  JSON.stringify(store.splitBatchInput('Notch, jeb_\nDinnerbone、Grumm')) === JSON.stringify(['Notch', 'jeb_', 'Dinnerbone', 'Grumm']),
+  JSON.stringify(store.splitBatchInput('Notch, jeb_\nDinnerbone、Grumm')));
+check('一次批量有上限，手一抖粘一百个也不会炸',
+  store.splitBatchInput(Array.from({ length: 40 }, (_, i) => 'player' + i).join(' ')).length === store.MAX_BATCH,
+  'MAX_BATCH=' + store.MAX_BATCH);
 
 const failed = results.filter((r) => !r.pass);
 const skipped = results.filter((r) => r.skipped);
