@@ -329,7 +329,7 @@ async function onDrop(event: DragEvent): Promise<void> {
                 v-if="renamingId !== preset.id"
                 type="button"
                 class="row__pick"
-                :title="'套用「' + preset.name + '」：' + preset.layers.length + ' 个头像会替换画布上的头像，底图不动（可撤销）'"
+                :title="'套用「' + preset.name + '」：替换画布上的 ' + preset.layers.length + ' 个头像，底图不动'"
                 @click="applyPreset(preset.id)"
               >
                 <span class="preset__faces" aria-hidden="true">
@@ -378,11 +378,10 @@ async function onDrop(event: DragEvent): Promise<void> {
             </div>
           </li>
         </ul>
-        <p v-else class="bf-note">还没有预设。摆好头像后点上面的按钮，就能把这一组存下来。</p>
+        <p v-else class="bf-note">还没有预设。摆好头像，点上面的按钮存一组。</p>
 
         <p class="bf-note preset__hint">
-          预设存的是这张图上<strong>全部头像</strong>的信息（位置、大小、旋转、不透明度、帽子层和各自的皮肤）。
-          套用会用它们替换画布上的头像，<strong>底图不动</strong>。
+          预设 = 这张图上<strong>全部头像</strong>的摆法；套用只换头像，<strong>底图不动</strong>。
         </p>
       </section>
     </div>
