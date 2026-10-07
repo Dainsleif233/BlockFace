@@ -5,6 +5,9 @@
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail: detail === undefined ? '' : String(detail) });
+// 依赖外网的用例：对方超时/限流时记"跳过"而不是"失败"，否则网络一抖就分不清是自己坏了还是没网。
+// 但只有真的没拿到数据才跳过；拿到了数据却没生效依然是失败。
+const skip = (name, detail) => results.push({ name, pass: true, skipped: true, detail: detail === undefined ? '' : String(detail) });
 const countDiff = (a, b) => {
   const da = a.getContext('2d').getImageData(0, 0, a.width, a.height).data;
   const db = b.getContext('2d').getImageData(0, 0, b.width, b.height).data;
@@ -41,7 +44,7 @@ document.querySelector('.rail--l .bf-card').dispatchEvent(new MouseEvent('click'
 await sleep(700);
 check('点 Steve 卡片生成 1 个图层', editor.layers.length === 1, 'layers=' + editor.layers.length);
 check('图层使用内置 Steve 皮肤', editor.layers[0] && editor.layers[0].skinId === 'builtin-steve', editor.layers[0] && editor.layers[0].skinId);
-check('默认不叠帽子层（官方 Steve 这层是灰头盔）', editor.layers[0] && editor.layers[0].overlay === false, 'overlay=' + (editor.layers[0] && editor.layers[0].overlay));
+check('默认叠上帽子层（正版渲染结果）', editor.layers[0] && editor.layers[0].overlay === true, 'overlay=' + (editor.layers[0] && editor.layers[0].overlay));
 
 // 选中状态下点别的皮肤是"换皮"，"新增头像"必须真的再加一个
 const keepSkin = editor.layers[0].skinId;
@@ -133,8 +136,8 @@ await sleep(250);
 check('拖右下角手柄放大图层', layer.size > sizeBefore + 40, sizeBefore + ' → ' + layer.size);
 
 // ============ 5. 帽子层开关 ============
-// 官方 Steve 的帽子层正面是全透明的（灰只出现在顶面，平面渲染看不到），
-// Alex 的帽子层正面是头发（不透明）。两个断言分别记录这两个数据事实。
+// 两个内置皮肤的第二层数据事实刚好相反，都量下来当作回归基线：
+// Steve 的第二层正面是一圈不透明灰（平铺直出会盖住额头两行与两鬓），Alex 的正面是全透明。
 const alex = store.getSkin('builtin-alex');
 const head128 = (skin, overlay) => renderHeadCanvasRef(skin, { overlay, pixelSize: 128 });
 const steveHat = countDiff(head128(steve, true), head128(steve, false));
@@ -230,7 +233,11 @@ try {
   urlOk = editor.skins.length === urlBefore + 1;
   urlDetail = urlOk ? editor.skins[editor.skins.length - 1].meta.label : 'skins=' + editor.skins.length;
 } catch (e) { urlDetail = String(e && e.message ? e.message : e); }
-check('皮肤 URL 入口可用', urlOk, urlDetail);
+// 只有"取图这一步就没成功"才按网络问题跳过；拿到了图却没进列表，那是真 bug。
+const netNotice = editor.notice && editor.notice.tone === 'error' && /失败|超时|网络|fetch|Failed|decode/i.test(editor.notice.message || '');
+if (urlOk) check('皮肤 URL 入口可用', true, urlDetail);
+else if (netNotice) skip('皮肤 URL 入口可用', '取不到图，按网络问题跳过：' + urlDetail + ' / ' + editor.notice.message);
+else check('皮肤 URL 入口可用', false, urlDetail);
 
 // 7c 正版账号 ID：走 playerdb
 let accOk = false;
@@ -242,7 +249,10 @@ try {
   accOk = editor.skins.length === accBefore + 1;
   accDetail = accOk ? editor.skins[editor.skins.length - 1].sourceLabel + ' / ' + editor.skins[editor.skins.length - 1].meta.label : 'skins=' + editor.skins.length;
 } catch (e) { accDetail = String(e && e.message ? e.message : e); }
-check('正版账号 ID 入口可用', accOk, accDetail);
+const accNotice = editor.notice && editor.notice.tone === 'error' && /失败|超时|网络|fetch|Failed|decode/i.test(editor.notice.message || '');
+if (accOk) check('正版账号 ID 入口可用', true, accDetail);
+else if (accNotice) skip('正版账号 ID 入口可用', '取不到图，按网络问题跳过：' + accDetail + ' / ' + editor.notice.message);
+else check('正版账号 ID 入口可用', false, accDetail);
 
 // ============ 8. 与独立实现逐像素交叉验证 ============
 // crafatar 的 /avatars 是别人用另一套代码渲染的平面头像（含帽子层合成），
@@ -285,7 +295,10 @@ try {
     );
   }
 } catch (e) {
-  check('与 crafatar 独立实现交叉验证', false, '未能取得参考图：' + String(e && e.message ? e.message : e));
+  // 同一批断言里前面可能已经有一张对拍成功了，那张成功就说明渲染没问题、只是网络这次没给图
+  const anyCompared = results.some((r) => r.name.indexOf('与 crafatar 独立实现逐像素一致') === 0 && r.pass);
+  if (anyCompared) skip('与 crafatar 独立实现交叉验证', '另一种变体没取到图，按网络问题跳过：' + String(e && e.message ? e.message : e));
+  else check('与 crafatar 独立实现交叉验证', false, '未能取得参考图：' + String(e && e.message ? e.message : e));
 }
 
 // ============ 8b. 头像预设 ============
@@ -301,7 +314,12 @@ check('保存当前头像为预设', editor.presets.length === presetsBefore + 1
 const saved = editor.presets[0];
 check('预设内嵌了皮肤位图', !!saved.skin && /^data:image\/png;base64,/.test(saved.skin.dataUrl),
   saved.skin ? saved.skin.dataUrl.slice(0, 24) + '… 共 ' + saved.skin.dataUrl.length + ' 字符' : 'null');
-check('预设带上了尺寸与帽子层状态', saved.size > 0 && saved.overlay === false, 'size=' + saved.size + ' overlay=' + saved.overlay);
+// 预设是"当前头像的快照"，所以要跟被保存的那个图层比，而不是跟默认值比 ——
+// 前面的帽子层开关用例会把状态改掉，硬写 true/false 都会偶发误报。
+const sourceLayer = editor.layers.find((l) => l.id === saved.sourceLayerId) || editor.layers[0];
+check('预设带上了尺寸与帽子层状态',
+  saved.size === sourceLayer.size && saved.overlay === sourceLayer.overlay,
+  '预设 size=' + saved.size + ' overlay=' + saved.overlay + ' / 图层 ' + sourceLayer.size + ' ' + sourceLayer.overlay);
 
 const stored = localStorage.getItem('blockface.presets.v1');
 let storedCount = -1;
@@ -377,4 +395,5 @@ check('导出画布的像素 = 离屏头像同点像素（颜色没被底纹混�
   '导出=' + JSON.stringify(soloPixel) + ' 离屏=' + JSON.stringify(soloHeadPixel));
 
 const failed = results.filter((r) => !r.pass);
-return { total: results.length, failed: failed.length, results };
+const skipped = results.filter((r) => r.skipped);
+return { total: results.length, failed: failed.length, skipped: skipped.length, results };

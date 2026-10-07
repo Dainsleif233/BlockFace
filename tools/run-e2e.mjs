@@ -17,10 +17,12 @@ const root = join(here, '..');
 const PORT = process.env.BF_E2E_PORT || '5179';
 const url = 'http://localhost:' + PORT + '/';
 
-const vite = spawn('npx', ['vite', '--port', PORT, '--strictPort'], {
+// 直接跑 vite 的入口脚本，不要用 shell 包一层 npx：Windows 上 shell:true 会变成
+// cmd.exe -> node(npx) -> node(vite) 三级，kill 只能杀掉最外层，vite 会一直留在后台，
+// 既占着端口又用文件监听锁住 src/，下次改代码就会写不进去。
+const vite = spawn(process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', PORT, '--strictPort'], {
   cwd: root,
   stdio: 'ignore',
-  shell: process.platform === 'win32',
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,8 +55,17 @@ function runCdp() {
   });
 }
 
+let stopped = false;
 function stop() {
+  if (stopped) return;
+  stopped = true;
   try { vite.kill(); } catch { /* ignore */ }
+  // 保险：万一 vite 还拉了子进程（比如 esbuild），把整棵树一起收掉
+  if (process.platform === 'win32' && vite.pid) {
+    try {
+      spawn('taskkill', ['/pid', String(vite.pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch { /* ignore */ }
+  }
 }
 
 let code = 1;
@@ -73,13 +84,18 @@ try {
     console.error('端到端没有产出结果：' + out.slice(0, 800));
   } else {
     for (const item of result.results) {
-      console.log((item.pass ? '  PASS  ' : '  FAIL  ') + item.name + (item.detail ? '   [' + item.detail + ']' : ''));
+      const tag = item.skipped ? '  SKIP  ' : item.pass ? '  PASS  ' : '  FAIL  ';
+      console.log(tag + item.name + (item.detail ? '   [' + item.detail + ']' : ''));
     }
-    console.log('\n' + (result.total - result.failed) + '/' + result.total + ' 通过');
+    const skipped = result.skipped || 0;
+    console.log('\n通过 ' + (result.total - result.failed - skipped) + ' / 失败 ' + result.failed + ' / 跳过 ' + skipped
+      + '（共 ' + result.total + ' 项）');
     code = result.failed === 0 ? 0 : 1;
   }
 } finally {
   stop();
+  // 给 taskkill 留一点时间落地，别让调用方一测完就又踩到残留进程
+  if (process.platform === 'win32') await sleep(400);
 }
 
 process.exit(code);
