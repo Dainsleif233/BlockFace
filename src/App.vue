@@ -1,0 +1,159 @@
+<!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import InspectorPanel from './components/InspectorPanel.vue';
+import SkinPanel from './components/SkinPanel.vue';
+import StageCanvas from './components/StageCanvas.vue';
+import StatusBar from './components/StatusBar.vue';
+import TopBar from './components/TopBar.vue';
+import { canRedo, canUndo, editor, redo, setBaseImage, undo } from './stores/editor';
+
+const dragActive = ref(false);
+let toastTimer: number | undefined;
+
+watch(
+  () => editor.notice,
+  (notice) => {
+    window.clearTimeout(toastTimer);
+    if (!notice) return;
+    toastTimer = window.setTimeout(() => {
+      editor.notice = null;
+    }, 5600);
+  },
+);
+
+function hasFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+function onDragOver(event: DragEvent): void {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  dragActive.value = true;
+}
+
+function onDragLeave(event: DragEvent): void {
+  if (event.relatedTarget === null) dragActive.value = false;
+}
+
+async function onDrop(event: DragEvent): Promise<void> {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  dragActive.value = false;
+  const file = event.dataTransfer?.files?.[0];
+  if (file && file.type.startsWith('image/')) await setBaseImage(file);
+}
+
+function onKey(event: KeyboardEvent): void {
+  if (!event.ctrlKey && !event.metaKey) return;
+  const target = event.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+  if (event.key.toLowerCase() !== 'z') return;
+  event.preventDefault();
+  if (event.shiftKey) {
+    if (canRedo.value) redo();
+  } else if (canUndo.value) {
+    undo();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('dragover', onDragOver);
+  window.addEventListener('dragleave', onDragLeave);
+  window.addEventListener('drop', onDrop);
+  window.addEventListener('keydown', onKey);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('dragover', onDragOver);
+  window.removeEventListener('dragleave', onDragLeave);
+  window.removeEventListener('drop', onDrop);
+  window.removeEventListener('keydown', onKey);
+  window.clearTimeout(toastTimer);
+});
+</script>
+
+<template>
+  <div class="app">
+    <TopBar />
+
+    <div class="workbench">
+      <SkinPanel />
+      <StageCanvas />
+      <InspectorPanel />
+    </div>
+
+    <StatusBar />
+
+    <div v-if="dragActive" class="dropzone">
+      <div class="dropzone__card">
+        <i class="bf-ic bf-ic--file" aria-hidden="true"><b /><b /></i>
+        <span>松手，把它设为底图</span>
+      </div>
+    </div>
+
+    <div v-if="editor.notice" class="notice" :data-tone="editor.notice.tone" role="status">
+      {{ editor.notice.message }}
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bf-paper);
+}
+
+.workbench { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
+
+.dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(242, 239, 230, 0.86);
+  pointer-events: none;
+}
+.dropzone__card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 22px 30px;
+  border: 2px dashed var(--bf-ink);
+  background: var(--bf-white);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.notice {
+  position: fixed;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  max-width: min(620px, 76vw);
+  padding: 10px 16px 10px 16px;
+  border: 1px solid var(--bf-ink);
+  background: var(--bf-white);
+  color: var(--bf-ink);
+  font-size: var(--bf-font-size-ui);
+  box-shadow: 6px 6px 0 rgba(20, 17, 15, 0.16);
+}
+.notice::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 4px;
+  background: var(--bf-ink);
+}
+.notice[data-tone="success"]::before { background: var(--bf-grass); }
+.notice[data-tone="warn"]::before { background: var(--bf-gold); }
+.notice[data-tone="error"]::before { background: var(--bf-red); }
+</style>
