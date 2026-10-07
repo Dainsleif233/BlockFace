@@ -8,6 +8,12 @@ const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail:
 // 依赖外网的用例：对方超时/限流时记"跳过"而不是"失败"，否则网络一抖就分不清是自己坏了还是没网。
 // 但只有真的没拿到数据才跳过；拿到了数据却没生效依然是失败。
 const skip = (name, detail) => results.push({ name, pass: true, skipped: true, detail: detail === undefined ? '' : String(detail) });
+// 外网说挂就挂，用例不能被一个连不上的域卡住跑不完：所有联网步骤都套一层超时。
+const withTimeout = (promise, ms, label) => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' 超过 ' + ms + 'ms 没响应')), ms)),
+]);
+const looksLikeNetwork = (text) => /失败|超时|超过|网络|没响应|timeout|fetch|Failed|decode/i.test(String(text || ''));
 const countDiff = (a, b) => {
   const da = a.getContext('2d').getImageData(0, 0, a.width, a.height).data;
   const db = b.getContext('2d').getImageData(0, 0, b.width, b.height).data;
@@ -228,15 +234,15 @@ let urlOk = false;
 let urlDetail = '';
 try {
   const urlBefore = editor.skins.length;
-  await store.useSkinUrl('https://crafatar.com/skins/8667ba71b85a4004af54457a9734eed7');
+  await withTimeout(store.useSkinUrl('https://crafatar.com/skins/8667ba71b85a4004af54457a9734eed7'), 15000, '皮肤 URL');
   await sleep(600);
   urlOk = editor.skins.length === urlBefore + 1;
   urlDetail = urlOk ? editor.skins[editor.skins.length - 1].meta.label : 'skins=' + editor.skins.length;
 } catch (e) { urlDetail = String(e && e.message ? e.message : e); }
 // 只有"取图这一步就没成功"才按网络问题跳过；拿到了图却没进列表，那是真 bug。
-const netNotice = editor.notice && editor.notice.tone === 'error' && /失败|超时|网络|fetch|Failed|decode/i.test(editor.notice.message || '');
+const netNotice = (editor.notice && editor.notice.tone === 'error' && looksLikeNetwork(editor.notice.message)) || looksLikeNetwork(urlDetail);
 if (urlOk) check('皮肤 URL 入口可用', true, urlDetail);
-else if (netNotice) skip('皮肤 URL 入口可用', '取不到图，按网络问题跳过：' + urlDetail + ' / ' + editor.notice.message);
+else if (netNotice) skip('皮肤 URL 入口可用', '取不到图，按网络问题跳过：' + urlDetail + (editor.notice ? ' / ' + editor.notice.message : ''));
 else check('皮肤 URL 入口可用', false, urlDetail);
 
 // 7c 正版账号 ID：走 playerdb
@@ -244,14 +250,14 @@ let accOk = false;
 let accDetail = '';
 try {
   const accBefore = editor.skins.length;
-  await store.useAccountSkin('Notch');
+  await withTimeout(store.useAccountSkin('Notch'), 15000, '正版账号');
   await sleep(800);
   accOk = editor.skins.length === accBefore + 1;
   accDetail = accOk ? editor.skins[editor.skins.length - 1].sourceLabel + ' / ' + editor.skins[editor.skins.length - 1].meta.label : 'skins=' + editor.skins.length;
 } catch (e) { accDetail = String(e && e.message ? e.message : e); }
-const accNotice = editor.notice && editor.notice.tone === 'error' && /失败|超时|网络|fetch|Failed|decode/i.test(editor.notice.message || '');
+const accNotice = (editor.notice && editor.notice.tone === 'error' && looksLikeNetwork(editor.notice.message)) || looksLikeNetwork(accDetail);
 if (accOk) check('正版账号 ID 入口可用', true, accDetail);
-else if (accNotice) skip('正版账号 ID 入口可用', '取不到图，按网络问题跳过：' + accDetail + ' / ' + editor.notice.message);
+else if (accNotice) skip('正版账号 ID 入口可用', '取不到图，按网络问题跳过：' + accDetail + (editor.notice ? ' / ' + editor.notice.message : ''));
 else check('正版账号 ID 入口可用', false, accDetail);
 
 // ============ 8. 与独立实现逐像素交叉验证 ============
@@ -264,15 +270,15 @@ const fetchAvatar = async (withOverlay) => {
   img.crossOrigin = 'anonymous';
   img.src = url;
   try {
-    await img.decode();
+    await withTimeout(img.decode(), 12000, '参考头像');
   } catch {
-    await sleep(1200);
+    await sleep(800);
     const retry = new Image();
     retry.crossOrigin = 'anonymous';
     retry.src = url + 'r';
-    await retry.decode();
+    await withTimeout(retry.decode(), 12000, '参考头像重试');
     img.src = retry.src;
-    await img.decode();
+    await withTimeout(img.decode(), 12000, '参考头像重新解码');
   }
   const canvas = document.createElement('canvas');
   canvas.width = 128; canvas.height = 128;
@@ -295,10 +301,15 @@ try {
     );
   }
 } catch (e) {
-  // 同一批断言里前面可能已经有一张对拍成功了，那张成功就说明渲染没问题、只是网络这次没给图
-  const anyCompared = results.some((r) => r.name.indexOf('与 crafatar 独立实现逐像素一致') === 0 && r.pass);
-  if (anyCompared) skip('与 crafatar 独立实现交叉验证', '另一种变体没取到图，按网络问题跳过：' + String(e && e.message ? e.message : e));
-  else check('与 crafatar 独立实现交叉验证', false, '未能取得参考图：' + String(e && e.message ? e.message : e));
+  // 参考图在别人服务器上，拿不到就是没验，不该报成"我们的渲染坏了"。
+  // 报 FAIL 会让网络一抖就红一片；报 SKIP 并把原因写清楚，跳过数就是这次没覆盖到的部分。
+  const message = String(e && e.message ? e.message : e);
+  const compared = results.filter((r) => r.name.indexOf('与 crafatar 独立实现逐像素一致') === 0 && r.pass).length;
+  if (looksLikeNetwork(message)) {
+    skip('与 crafatar 独立实现交叉验证', '这次没和外部实现对拍（已成功 ' + compared + '/2 种变体）：' + message);
+  } else {
+    check('与 crafatar 独立实现交叉验证', false, '未能取得参考图：' + message);
+  }
 }
 
 // ============ 8b. 头像预设 ============
