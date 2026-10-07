@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { AvatarLayer, HandleName } from '../core/model/types';
+import { wheelRotation, wheelZoomFactor } from '../core/model/gesture';
 import {
   allHandlePositions,
   clampLayerToDocument,
@@ -14,12 +15,17 @@ import {
 import { composeDocument } from '../core/render/compose';
 import type { SkinTexture } from '../core/skin/texture';
 import {
+  baseViewIsDefault,
   beginChange,
   editor,
   endChange,
   getBaseImage,
   getSkin,
+  resetBaseView,
+  rotateLayerBy,
+  scaleLayerBy,
   selectLayer,
+  zoomBaseAt,
 } from '../stores/editor';
 
 /** 旋转手柄离顶边的屏幕距离 */
@@ -39,15 +45,23 @@ const stage = ref<HTMLDivElement | null>(null);
 const docCanvas = ref<HTMLCanvasElement | null>(null);
 const overlayCanvas = ref<HTMLCanvasElement | null>(null);
 
+/** 悬浮名字条的最大外框（用来把它夹在画布里，不让它被裁掉） */
+const TIP_WIDTH = 220;
+const TIP_HEIGHT = 30;
+
 const wrapSize = ref({ w: 960, h: 620 });
 let resizeObserver: ResizeObserver | null = null;
 
 type Drag =
   | { kind: 'move'; id: string; originX: number; originY: number; layerX: number; layerY: number }
   | { kind: 'resize'; id: string; handle: Exclude<HandleName, 'rotate'> }
-  | { kind: 'rotate'; id: string };
+  | { kind: 'rotate'; id: string }
+  | { kind: 'pan'; originX: number; originY: number; viewX: number; viewY: number; clientX: number; clientY: number; moved: boolean };
 
 let drag: Drag | null = null;
+
+/** 悬浮在头像上时跟着光标走的名字条 */
+const hover = ref<{ name: string; x: number; y: number } | null>(null);
 
 const fitScale = computed(() => {
   const pad = 44;
@@ -65,9 +79,11 @@ const stageStyle = computed(() => ({
 }));
 
 const selected = computed(() => editor.layers.find((l) => l.id === editor.selectedId) ?? null);
-const baseChip = computed(() =>
-  editor.baseImage ? editor.baseImage.width + ' × ' + editor.baseImage.height : '未设置（导出透明底）',
-);
+const baseChip = computed(() => {
+  if (!editor.baseImage) return '未设置（导出透明底）';
+  const percent = Math.round(editor.baseView.scale * 100);
+  return editor.baseImage.width + ' × ' + editor.baseImage.height + ' · ' + percent + '%';
+});
 
 const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
 
@@ -93,13 +109,15 @@ function renderDocument(): void {
     const skin = getSkin(layer.skinId);
     if (skin) items.push({ layer, skin });
   }
+  const baseImage = getBaseImage(editor.baseImageId);
   composeDocument(canvas, {
     width: editor.document.width,
     height: editor.document.height,
     scale: viewScale.value * dpr(),
-    baseImage: getBaseImage(editor.baseImageId),
+    base: baseImage ? { image: baseImage, ...editor.baseView } : null,
     items,
-    checkerboard: !editor.baseImage,
+    // 预览一直铺棋盘：底图被挪开或缩小时露出来的地方，就是导出时的透明区域
+    checkerboard: true,
   });
 }
 
@@ -182,7 +200,7 @@ function renderOverlay(): void {
   }
 }
 
-function toDocumentPoint(event: PointerEvent): { x: number; y: number } {
+function toDocumentPoint(event: { clientX: number; clientY: number }): { x: number; y: number } {
   const rect = stage.value?.getBoundingClientRect();
   if (!rect) return { x: 0, y: 0 };
   return { x: (event.clientX - rect.left) / viewScale.value, y: (event.clientY - rect.top) / viewScale.value };
@@ -194,6 +212,16 @@ function capturePointer(event: PointerEvent): void {
   } catch {
     // 合成事件（自动化测试）或指针已释放时无可用 pointerId，忽略即可
   }
+}
+
+/** 命中最上面的那个可见头像（数组末位画在最上层） */
+function hitTopLayer(point: { x: number; y: number }): AvatarLayer | null {
+  for (let i = editor.layers.length - 1; i >= 0; i -= 1) {
+    const candidate = editor.layers[i];
+    if (!candidate.visible) continue;
+    if (hitTestLayer(candidate, point.x, point.y)) return candidate;
+  }
+  return null;
 }
 
 function onPointerDown(event: PointerEvent): void {
@@ -213,45 +241,79 @@ function onPointerDown(event: PointerEvent): void {
     }
   }
 
-  for (let i = editor.layers.length - 1; i >= 0; i -= 1) {
-    const candidate = editor.layers[i];
-    if (!candidate.visible) continue;
-    if (hitTestLayer(candidate, point.x, point.y)) {
-      selectLayer(candidate.id);
-      beginChange();
-      drag = {
-        kind: 'move',
-        id: candidate.id,
-        originX: point.x,
-        originY: point.y,
-        layerX: candidate.x,
-        layerY: candidate.y,
-      };
-      capturePointer(event);
-      event.preventDefault();
-      return;
-    }
+  const target = hitTopLayer(point);
+  if (target) {
+    selectLayer(target.id);
+    beginChange();
+    drag = {
+      kind: 'move',
+      id: target.id,
+      originX: point.x,
+      originY: point.y,
+      layerX: target.x,
+      layerY: target.y,
+    };
+    capturePointer(event);
+    event.preventDefault();
+    return;
+  }
+
+  if (editor.baseImage) {
+    // 底图上按住拖动 = 挪底图（头像优先，所以只有没点到头像时才轮到它）。
+    // 真动起来才记历史：原地按一下不该占掉一格撤销。
+    drag = {
+      kind: 'pan',
+      originX: point.x,
+      originY: point.y,
+      viewX: editor.baseView.x,
+      viewY: editor.baseView.y,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      moved: false,
+    };
+    capturePointer(event);
+    event.preventDefault();
+    return;
   }
 
   selectLayer(null);
 }
 
 function onPointerMove(event: PointerEvent): void {
-  if (!drag) return;
-  const layer = editor.layers.find((l) => l.id === drag!.id);
-  if (!layer) return;
+  const active = drag;
+  if (!active) {
+    updateHover(event);
+    return;
+  }
+  hover.value = null; // 拖动时名字条会挡着图层，先收起来
   const point = toDocumentPoint(event);
 
-  if (drag.kind === 'move') {
+  if (active.kind === 'pan') {
+    // 手抖不算拖动：不挪底图，也不占一格历史
+    if (!active.moved) {
+      if (Math.hypot(event.clientX - active.clientX, event.clientY - active.clientY) < 4) return;
+      active.moved = true;
+      beginChange();
+    }
+    editor.baseView.x = Math.round(active.viewX + (point.x - active.originX));
+    editor.baseView.y = Math.round(active.viewY + (point.y - active.originY));
+    schedule();
+    return;
+  }
+
+  const layer = editor.layers.find((l) => l.id === active.id);
+  if (!layer) return;
+
+  if (active.kind === 'move') {
     const next = clampLayerToDocument(
-      { x: drag.layerX + (point.x - drag.originX), y: drag.layerY + (point.y - drag.originY), size: layer.size },
+      { x: active.layerX + (point.x - active.originX), y: active.layerY + (point.y - active.originY), size: layer.size },
       editor.document.width,
       editor.document.height,
     );
     layer.x = Math.round(next.x);
     layer.y = Math.round(next.y);
-  } else if (drag.kind === 'resize') {
-    const result = resizeFromHandle({ layer, handle: drag.handle, point });
+  } else if (active.kind === 'resize') {
+    const result = resizeFromHandle({ layer, handle: active.handle, point });
     layer.x = result.x;
     layer.y = result.y;
     layer.size = Math.round(result.size);
@@ -261,10 +323,38 @@ function onPointerMove(event: PointerEvent): void {
   schedule();
 }
 
+/** 悬浮在头像上就把名字标出来：图层一多，光看脸认不出谁是谁 */
+function updateHover(event: PointerEvent): void {
+  const rect = wrap.value?.getBoundingClientRect();
+  if (!rect) return;
+  const target = hitTopLayer(toDocumentPoint(event));
+  if (!target) {
+    hover.value = null;
+    return;
+  }
+  hover.value = {
+    name: target.name || '未命名头像',
+    // 贴着光标右下角，但不许越出画布：越出去会被 .stage__body 裁掉
+    x: Math.min(Math.max(0, event.clientX - rect.left + 14), Math.max(0, rect.width - TIP_WIDTH)),
+    y: Math.min(Math.max(0, event.clientY - rect.top + 16), Math.max(0, rect.height - TIP_HEIGHT)),
+  };
+}
+
+function clearHover(): void {
+  hover.value = null;
+}
+
 function onPointerUp(event: PointerEvent): void {
-  if (!drag) return;
+  const active = drag;
+  if (!active) return;
   drag = null;
-  endChange();
+  if (active.kind === 'pan') {
+    // 在底图上按一下没拖动 —— 那就是原来"点空白取消选中"的意思
+    if (active.moved) endChange();
+    else selectLayer(null);
+  } else {
+    endChange();
+  }
   try {
     if (wrap.value?.hasPointerCapture(event.pointerId)) wrap.value.releasePointerCapture(event.pointerId);
   } catch {
@@ -273,12 +363,47 @@ function onPointerUp(event: PointerEvent): void {
   schedule();
 }
 
+/**
+ * 滚轮的分工：
+ * - Ctrl/⌘ + 滚轮（含触控板捏合）→ 缩放视图本身，这是原有行为，保留
+ * - 光标落在头像上 → 缩放该头像；按住 Shift → 旋转它
+ * - 光标落在底图/空白上 → 缩放底图，锚在光标底下那个像素
+ * - 连底图都没有 → 退回缩放视图，免得滚了毫无反应
+ *
+ * 真实鼠标按住 Shift 滚轮时，Chrome 会把读数搬到 deltaX 上，所以先补回来。
+ */
 function onWheel(event: WheelEvent): void {
-  if (!event.ctrlKey && !event.metaKey) return;
+  const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+  const unit = event.deltaMode;
+
+  if (event.ctrlKey || event.metaKey) {
+    event.preventDefault();
+    zoomBy(delta < 0 ? 1.1 : 1 / 1.1);
+    return;
+  }
+
+  const point = toDocumentPoint(event);
+  const target = hitTopLayer(point);
+
+  if (target) {
+    event.preventDefault();
+    // 滚轮改的是这个头像，顺手选中它：属性面板与手柄都会跟着切过去
+    if (editor.selectedId !== target.id) selectLayer(target.id);
+    if (event.shiftKey) rotateLayerBy(target.id, wheelRotation(delta, unit));
+    else scaleLayerBy(target.id, wheelZoomFactor(delta, unit));
+    schedule();
+    return;
+  }
+
+  if (editor.baseImage) {
+    event.preventDefault();
+    zoomBaseAt(point, wheelZoomFactor(delta, unit));
+    schedule();
+    return;
+  }
+
   event.preventDefault();
-  const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
-  editor.view.zoom = Math.min(6, Math.max(0.05, viewScale.value * factor));
-  editor.view.autoFit = false;
+  zoomBy(delta < 0 ? 1.1 : 1 / 1.1);
 }
 
 function zoomBy(factor: number): void {
@@ -357,6 +482,7 @@ watch(
     editor.document.height,
     editor.selectedId,
     editor.baseImageId,
+    editor.baseView,
     editor.layers,
     editor.skinRevision,
     viewScale.value,
@@ -395,6 +521,7 @@ defineExpose({ schedule });
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
+      @pointerleave="clearHover"
       @wheel="onWheel"
     >
       <div ref="stage" class="artboard" :style="stageStyle">
@@ -402,11 +529,25 @@ defineExpose({ schedule });
         <canvas ref="overlayCanvas" class="artboard__overlay" />
       </div>
 
+      <span v-if="hover" class="stage__tip" :style="{ left: hover.x + 'px', top: hover.y + 'px' }">
+        {{ hover.name }}
+      </span>
+
       <p v-if="!editor.baseImage" class="stage__empty">把图片拖进窗口，或点顶栏的「打开图片」</p>
     </div>
 
     <div class="stage__foot">
-      <span class="bf-chip bf-chip--dark">拖动移动 · 四角缩放 · 顶部旋转</span>
+      <span class="bf-chip bf-chip--dark">头像 拖动 · 滚轮缩放 · Shift+滚轮旋转</span>
+      <span class="bf-chip bf-chip--dark">底图 拖动 · 滚轮缩放</span>
+      <button
+        v-if="!baseViewIsDefault"
+        class="bf-btn bf-btn--sm bf-btn--quiet stage__reset"
+        type="button"
+        title="把底图放回刚打开时的位置与大小"
+        @click="resetBaseView"
+      >
+        底图复位
+      </button>
     </div>
   </section>
 </template>
@@ -478,5 +619,21 @@ defineExpose({ schedule });
   white-space: nowrap;
 }
 
-.stage__foot-note { margin-left: auto; }
+.stage__reset { margin-left: auto; }
+
+.stage__tip {
+  position: absolute;
+  z-index: 2;
+  max-width: 200px;
+  padding: 4px 8px;
+  border: 1px solid var(--bf-paper);
+  background: var(--bf-ink);
+  color: var(--bf-paper);
+  font-size: var(--bf-font-size-sm);
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
 </style>

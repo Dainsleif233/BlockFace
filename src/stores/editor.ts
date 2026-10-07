@@ -17,6 +17,14 @@ import {
   type PresetLayer,
   type PresetSkin,
 } from '../core/model/preset';
+import {
+  coverBaseView,
+  isCoverBaseView,
+  scaleSizeBy,
+  tidyAngle,
+  zoomBaseView,
+  type BaseView,
+} from '../core/model/gesture';
 import { clampLayerToDocument } from '../core/model/transform';
 import { createId, MIN_LAYER_SIZE, type AvatarLayer, type BaseImageMeta } from '../core/model/types';
 import { composeDocument } from '../core/render/compose';
@@ -70,6 +78,7 @@ export interface Notice {
 interface Snapshot {
   document: { width: number; height: number };
   baseImageId: string | null;
+  baseView: BaseView;
   layers: AvatarLayer[];
   selectedId: string | null;
   activeSkinId: string | null;
@@ -79,6 +88,8 @@ interface EditorState {
   document: { width: number; height: number };
   baseImage: BaseImageMeta | null;
   baseImageId: string | null;
+  /** 底图在文档里的摆放（位置 + 缩放）：滚轮与拖动改的就是它 */
+  baseView: BaseView;
   skins: SkinRecord[];
   activeSkinId: string | null;
   presets: Preset[];
@@ -101,6 +112,7 @@ const state = reactive<EditorState>({
   document: { ...DEFAULT_DOCUMENT },
   baseImage: null,
   baseImageId: null,
+  baseView: { x: 0, y: 0, scale: 1 },
   skins: [],
   activeSkinId: null,
   presets: [],
@@ -137,6 +149,7 @@ function snapshot(): Snapshot {
   return {
     document: { ...state.document },
     baseImageId: state.baseImageId,
+    baseView: { ...state.baseView },
     layers: state.layers.map((l) => ({ ...l })),
     selectedId: state.selectedId,
     activeSkinId: state.activeSkinId,
@@ -147,6 +160,7 @@ function restore(snap: Snapshot): void {
   state.document = { ...snap.document };
   state.baseImageId = snap.baseImageId;
   state.baseImage = snap.baseImageId ? readBaseMeta(snap.baseImageId) : null;
+  state.baseView = { ...snap.baseView };
   state.layers = snap.layers.map((l) => ({ ...l }));
   state.selectedId = snap.selectedId;
   state.activeSkinId = snap.activeSkinId;
@@ -176,6 +190,20 @@ export function endChange(): void {
 function commit(): void {
   beginChange();
   endChange();
+}
+
+/**
+ * 滚轮手势专用的历史：滚轮来得又快又密，一个事件记一条会把撤销列表冲爆，
+ * 所以整个手势只收一条，停止滚动 400ms 后自动收尾。
+ */
+let wheelTimer: ReturnType<typeof setTimeout> | null = null;
+export function beginWheelChange(): void {
+  beginChange();
+  if (wheelTimer) clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => {
+    wheelTimer = null;
+    endChange();
+  }, 400);
 }
 
 export function undo(): void {
@@ -308,6 +336,22 @@ export function updateLayer(id: string, patch: Partial<AvatarLayer>, record = tr
   if (record) commit();
   Object.assign(layer, patch);
   if (patch.size !== undefined) layer.size = clampSize(patch.size);
+}
+
+/** 滚轮缩放一个头像：以图层中心为锚点按倍率改边长 */
+export function scaleLayerBy(id: string, factor: number): void {
+  const layer = state.layers.find((l) => l.id === id);
+  if (!layer) return;
+  beginWheelChange();
+  layer.size = scaleSizeBy(layer.size, factor, MIN_LAYER_SIZE, maxLayerSize.value);
+}
+
+/** Shift + 滚轮旋转一个头像 */
+export function rotateLayerBy(id: string, degrees: number): void {
+  const layer = state.layers.find((l) => l.id === id);
+  if (!layer) return;
+  beginWheelChange();
+  layer.rotation = tidyAngle(layer.rotation + degrees);
 }
 
 export function nudgeSelected(dx: number, dy: number): void {
@@ -547,6 +591,7 @@ export async function setBaseImage(file: File): Promise<void> {
       state.baseImageId = id;
       state.baseImage = meta;
       state.document = { width: loaded.width, height: loaded.height };
+      state.baseView = coverBaseView(loaded.width, loaded.height, state.document.width, state.document.height);
       for (const layer of state.layers) {
         const next = clampLayerToDocument(layer, state.document.width, state.document.height);
         layer.x = next.x;
@@ -568,7 +613,36 @@ export function clearBaseImage(): void {
   commit();
   state.baseImageId = null;
   state.baseImage = null;
+  state.baseView = { x: 0, y: 0, scale: 1 };
   state.document = { ...DEFAULT_DOCUMENT };
+}
+
+function baseImageSize(image: HTMLImageElement): { width: number; height: number } {
+  return { width: image.naturalWidth || image.width, height: image.naturalHeight || image.height };
+}
+
+/** 底图是不是还停在"刚打开图片"的位置 —— 不是的话界面上才出现「底图复位」 */
+export const baseViewIsDefault = computed(() => {
+  const image = getBaseImage(state.baseImageId);
+  if (!image) return true;
+  const { width, height } = baseImageSize(image);
+  return isCoverBaseView(state.baseView, width, height, state.document.width, state.document.height);
+});
+
+/** 滚轮缩放底图：以光标为锚点，光标底下那个像素缩放前后停在原地 */
+export function zoomBaseAt(point: { x: number; y: number }, factor: number): void {
+  if (!getBaseImage(state.baseImageId)) return;
+  beginWheelChange();
+  state.baseView = zoomBaseView(state.baseView, point, factor);
+}
+
+/** 把底图放回刚打开时的位置与大小 */
+export function resetBaseView(): void {
+  const image = getBaseImage(state.baseImageId);
+  if (!image) return;
+  const { width, height } = baseImageSize(image);
+  commit();
+  state.baseView = coverBaseView(width, height, state.document.width, state.document.height);
 }
 
 export function setDocumentSize(width: number, height: number): void {
@@ -595,7 +669,7 @@ function composeToCanvas(scale: number, checkerboard: boolean): HTMLCanvasElemen
       width: state.document.width,
       height: state.document.height,
       scale,
-      baseImage,
+      base: baseImage ? { image: baseImage, ...state.baseView } : null,
       items,
       checkerboard,
     });
