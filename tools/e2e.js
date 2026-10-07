@@ -405,6 +405,84 @@ check('导出画布的像素 = 离屏头像同点像素（颜色没被底纹混�
   soloPixel[3] === 255 && soloPixel[0] === soloHeadPixel[0] && soloPixel[1] === soloHeadPixel[1] && soloPixel[2] === soloHeadPixel[2],
   '导出=' + JSON.stringify(soloPixel) + ' 离屏=' + JSON.stringify(soloHeadPixel));
 
+// ============ 8c. 图层前后顺序 ============
+// 干净的舞台：清空后放两层完全重叠，谁在上面那一格就显示谁
+for (const item of [...editor.layers]) store.removeLayer(item.id);
+await sleep(250);
+document.querySelectorAll('.rail--l .bf-card')[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+await sleep(600);
+store.addAvatar();
+await sleep(250);
+await store.useBuiltinSkin('alex');
+await sleep(700);
+check('准备好两层（Steve 在下、Alex 在上）', editor.layers.length === 2, 'layers=' + editor.layers.length);
+
+const rowsNow = Array.from(document.querySelectorAll('.layers li[data-layer-id]'));
+check('列表按上层在前渲染', rowsNow.length === 2 && rowsNow[0].dataset.layerId === editor.layers[1].id,
+  rowsNow.map((r) => r.dataset.layerId).join(',') + ' / 数组 ' + editor.layers.map((l) => l.id).join(','));
+check('每行都有拖动手柄', document.querySelectorAll('.layers .lay__grip').length === 2,
+  '手柄=' + document.querySelectorAll('.layers .lay__grip').length);
+
+for (const item of editor.layers) store.updateLayer(item.id, { x: 400, y: 300, size: 220, rotation: 0, opacity: 1 });
+await sleep(500);
+
+const docRect = document.querySelector('.artboard').getBoundingClientRect();
+const scaleDoc = (docRect.width - 2) / editor.document.width;
+const dprDoc = Math.min(window.devicePixelRatio || 1, 2);
+const relPos = 0.3125; // 正脸第 10 列的中心，离像素边界远，取样不会骑墙
+const headAt = (item) => renderHeadCanvasRef(store.getSkin(item.skinId), { overlay: item.overlay, pixelSize: Math.round(item.size * scaleDoc * dprDoc) });
+const headPixelOf = (item) => {
+  const head = headAt(item);
+  return Array.from(head.getContext('2d').getImageData(Math.round(head.width * relPos), Math.round(head.height * relPos), 1, 1).data);
+};
+const docPixelOf = (item) => Array.from(document.querySelector('.artboard__doc').getContext('2d').getImageData(
+  Math.round((item.x - item.size / 2 + item.size * relPos) * scaleDoc * dprDoc),
+  Math.round((item.y - item.size / 2 + item.size * relPos) * scaleDoc * dprDoc), 1, 1).data);
+const samePixel = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+
+const [steveLayer, alexLayer] = editor.layers;
+const stevePixel = headPixelOf(steveLayer);
+const alexPixel = headPixelOf(alexLayer);
+check('两层皮肤颜色本身不同（不然顺序验不出来）', !samePixel(stevePixel, alexPixel),
+  'Steve=' + JSON.stringify(stevePixel) + ' Alex=' + JSON.stringify(alexPixel));
+check('重叠处显示的是上层（Alex）', samePixel(docPixelOf(alexLayer), alexPixel), '画布=' + JSON.stringify(docPixelOf(alexLayer)));
+
+store.moveLayerTo(alexLayer.id, 0); // 把 Alex 压到底下
+await sleep(400);
+check('挪到底层后数组顺序变了', editor.layers[0].id === alexLayer.id, editor.layers.map((l) => l.id).join(','));
+check('重叠处改成显示 Steve', samePixel(docPixelOf(steveLayer), stevePixel), '画布=' + JSON.stringify(docPixelOf(steveLayer)));
+
+store.undo();
+await sleep(400);
+check('撤销一次就回到原来的前后关系', editor.layers[1].id === alexLayer.id && samePixel(docPixelOf(alexLayer), alexPixel),
+  editor.layers.map((l) => l.id).join(',') + ' 画布=' + JSON.stringify(docPixelOf(alexLayer)));
+
+// 模拟一次拖动：按住列表第一行往下拖过第二行
+const list = document.querySelector('.layers');
+// 事件要发在行里面的元素上（真实指针也是打在子元素上），发在 ul 上时 target 就是 ul，
+// closest('li') 找不到行，拖动根本不会开始。
+const rowEls = Array.from(list.querySelectorAll('li[data-layer-id]'));
+const rowBoxes = rowEls.map((r) => r.getBoundingClientRect());
+const grabTargets = rowEls.map((r) => r.querySelector('.lay__pick') || r);
+const orderBeforeDrag = editor.layers.map((l) => l.id).join(',');
+const pointerAt = (type, y) => new PointerEvent(type, {
+  bubbles: true, cancelable: true, clientX: rowBoxes[0].left + 30, clientY: y, pointerId: 7, button: 0, buttons: type === 'pointerup' ? 0 : 1, isPrimary: true,
+});
+grabTargets[0].dispatchEvent(pointerAt('pointerdown', rowBoxes[0].top + rowBoxes[0].height / 2));
+grabTargets[0].dispatchEvent(pointerAt('pointermove', rowBoxes[0].top + rowBoxes[0].height / 2 + 6));
+grabTargets[0].dispatchEvent(pointerAt('pointermove', rowBoxes[1].top + rowBoxes[1].height / 2));
+grabTargets[0].dispatchEvent(pointerAt('pointerup', rowBoxes[1].top + rowBoxes[1].height / 2));
+await sleep(400);
+// 第一行是 Alex（上层），往下拖过第二行 ⟹ Alex 落到最底层，也就是数组第 0 位
+check('拖动第一行到第二行，Alex 落到底层',
+  editor.layers[0].id === alexLayer.id && editor.layers.map((l) => l.id).join(',') !== orderBeforeDrag,
+  orderBeforeDrag + ' → ' + editor.layers.map((l) => l.id).join(','));
+
+const afterDrag = editor.layers.map((l) => l.id).join(',');
+store.undo();
+await sleep(300);
+check('整次拖动只占一条历史', editor.layers.map((l) => l.id).join(',') === orderBeforeDrag, afterDrag + ' → ' + editor.layers.map((l) => l.id).join(','));
+
 const failed = results.filter((r) => !r.pass);
 const skipped = results.filter((r) => r.skipped);
 return { total: results.length, failed: failed.length, skipped: skipped.length, results };

@@ -1,6 +1,6 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { MIN_LAYER_SIZE, type AvatarLayer } from '../core/model/types';
 import {
   addAvatar,
@@ -11,6 +11,8 @@ import {
   endChange,
   fitSelectedToDocument,
   maxLayerSize,
+  moveLayerTo,
+  nudgeLayerOrder,
   removeLayer,
   selectLayer,
   updateLayer,
@@ -26,6 +28,65 @@ interface SliderSpec {
   max: number;
   step: number;
   factor: number;
+}
+
+/**
+ * 图层列表按"看得见的顺序"排：上层在列表上方，跟画面上的遮挡关系一致。
+ * 数组本身是 0 = 最底层，所以这里反过来渲染，拖动时再换算回数组下标。
+ */
+const layerRows = computed(() => editor.layers.slice().reverse());
+const toArrayIndex = (rowIndex: number): number => editor.layers.length - 1 - rowIndex;
+
+const drag = ref<{ id: string; startY: number; moved: boolean } | null>(null);
+
+function rowAt(list: HTMLElement, clientY: number): number {
+  const rows = Array.from(list.querySelectorAll<HTMLElement>('li[data-layer-id]'));
+  if (!rows.length) return -1;
+  for (let i = 0; i < rows.length; i += 1) {
+    const box = rows[i].getBoundingClientRect();
+    if (clientY >= box.top && clientY <= box.bottom) return i;
+  }
+  const first = rows[0].getBoundingClientRect();
+  return clientY < first.top ? 0 : rows.length - 1;
+}
+
+/** 在整张列表上做事件委托，两个列表（有选中 / 没选中）共用同一套拖动逻辑 */
+function onListPointerDown(event: PointerEvent): void {
+  const row = (event.target as HTMLElement).closest<HTMLElement>('li[data-layer-id]');
+  if (!row || event.button !== 0) return;
+  const id = row.dataset.layerId;
+  if (!id) return;
+  drag.value = { id, startY: event.clientY, moved: false };
+  try {
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  } catch {
+    /* 合成事件里没有真实指针，抓不住也无所谓，后面的 move 照样能算 */
+  }
+}
+
+function onListPointerMove(event: PointerEvent): void {
+  const state = drag.value;
+  if (!state) return;
+  if (!state.moved) {
+    if (Math.abs(event.clientY - state.startY) < 4) return; // 手抖不算拖动，也不占一条历史
+    state.moved = true;
+    beginChange();
+  }
+  const rowIndex = rowAt(event.currentTarget as HTMLElement, event.clientY);
+  if (rowIndex >= 0) moveLayerTo(state.id, toArrayIndex(rowIndex), false);
+}
+
+function onListPointerUp(): void {
+  const state = drag.value;
+  drag.value = null;
+  if (state?.moved) endChange();
+}
+
+/** 键盘也能调顺序：Alt + 上/下 */
+function onRowKeydown(event: KeyboardEvent, id: string): void {
+  if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+  event.preventDefault();
+  nudgeLayerOrder(id, event.key === 'ArrowUp' ? 1 : -1);
 }
 
 const layer = computed(() => editor.layers.find((l) => l.id === editor.selectedId) ?? null);
@@ -187,11 +248,24 @@ function resetTransform(): void {
             <button class="bf-btn bf-btn--sm bf-btn--quiet layers__add" type="button" @click="addAvatar">新增头像</button>
           </span>
         </div>
-        <ul class="layers">
-          <li v-for="item in editor.layers" :key="item.id">
-            <div class="bf-lay" :aria-current="item.id === editor.selectedId">
+        <ul
+          class="layers"
+          @pointerdown="onListPointerDown"
+          @pointermove="onListPointerMove"
+          @pointerup="onListPointerUp"
+          @pointercancel="onListPointerUp"
+        >
+          <li v-for="item in layerRows" :key="item.id" :data-layer-id="item.id">
+            <div class="bf-lay" :aria-current="item.id === editor.selectedId" :data-dragging="drag?.id === item.id">
               <i class="bf-lay-bar" aria-hidden="true" />
-              <button type="button" class="lay__pick" @click="selectLayer(item.id)">
+              <i class="lay__grip" aria-hidden="true" />
+              <button
+                type="button"
+                class="lay__pick"
+                title="按住上下拖动可以调整前后顺序，Alt + 上下方向键也行"
+                @click="selectLayer(item.id)"
+                @keydown="onRowKeydown($event, item.id)"
+              >
                 <span class="bf-face">
                   <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :size="24" />
                 </span>
@@ -230,11 +304,24 @@ function resetTransform(): void {
       <div><button class="bf-btn bf-btn--sm bf-btn--ink" type="button" @click="addAvatar">新增头像</button></div>
       <div v-if="editor.layers.length" class="bf-sblk bf-sblk--grass">
         <div class="bf-sblk-t"><h3>图层</h3><span>{{ editor.layers.length }} 个</span></div>
-        <ul class="layers">
-          <li v-for="item in editor.layers" :key="item.id">
-            <div class="bf-lay">
+        <ul
+          class="layers"
+          @pointerdown="onListPointerDown"
+          @pointermove="onListPointerMove"
+          @pointerup="onListPointerUp"
+          @pointercancel="onListPointerUp"
+        >
+          <li v-for="item in layerRows" :key="item.id" :data-layer-id="item.id">
+            <div class="bf-lay" :data-dragging="drag?.id === item.id">
               <i class="bf-lay-bar" aria-hidden="true" />
-              <button type="button" class="lay__pick" @click="selectLayer(item.id)">
+              <i class="lay__grip" aria-hidden="true" />
+              <button
+                type="button"
+                class="lay__pick"
+                title="按住上下拖动可以调整前后顺序，Alt + 上下方向键也行"
+                @click="selectLayer(item.id)"
+                @keydown="onRowKeydown($event, item.id)"
+              >
                 <span class="bf-face">
                   <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :size="24" />
                 </span>

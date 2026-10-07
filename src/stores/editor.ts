@@ -279,6 +279,27 @@ export function duplicateLayer(id: string): void {
   endChange();
 }
 
+/**
+ * 把图层挪到数组第 index 位（0 是最底层，最后一位是最上层）。
+ * 拖动过程中用 record = false 就地重排、松手时再收一条历史，这样整次拖动只占一格撤销。
+ */
+export function moveLayerTo(id: string, index: number, record = true): void {
+  const from = state.layers.findIndex((l) => l.id === id);
+  if (from < 0) return;
+  const to = Math.max(0, Math.min(state.layers.length - 1, index));
+  if (to === from) return;
+  if (record) commit();
+  const [layer] = state.layers.splice(from, 1);
+  state.layers.splice(to, 0, layer);
+}
+
+/** 上移/下移一层（键盘操作），delta 为正表示往上层走 */
+export function nudgeLayerOrder(id: string, delta: number): void {
+  const from = state.layers.findIndex((l) => l.id === id);
+  if (from < 0) return;
+  moveLayerTo(id, from + delta);
+}
+
 export function updateLayer(id: string, patch: Partial<AvatarLayer>, record = true): void {
   const layer = state.layers.find((l) => l.id === id);
   if (!layer) return;

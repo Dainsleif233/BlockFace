@@ -282,8 +282,20 @@ h1, h2, h3, p { margin: 0; }
   padding: 0 9px 0 7px;
   background: var(--bf-white);
   border: 1px solid var(--bf-line);
+  cursor: grab;
+  touch-action: none;
 }
 .bf-lay[aria-current="true"] { border-color: var(--bf-ink); }
+.bf-lay[data-dragging="true"] { cursor: grabbing; border-color: var(--bf-ink); background: var(--bf-rail); }
+/* 拖动手柄：2×2 的方块阵列，硬边无圆角，和"控件即积木"一致 */
+.lay__grip {
+  flex: none;
+  width: 10px;
+  height: 14px;
+  background-image:
+    repeating-linear-gradient(90deg, var(--bf-ink2) 0 2px, transparent 2px 5px),
+    repeating-linear-gradient(0deg, var(--bf-ink2) 0 2px, transparent 2px 5px);
+}
 .bf-lay-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--bf-line); }
 .bf-lay[aria-current="true"] .bf-lay-bar { background: var(--bf-grass); }
 .bf-lay-n { font: 700 var(--bf-font-size-ui) / 1 var(--bf-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
