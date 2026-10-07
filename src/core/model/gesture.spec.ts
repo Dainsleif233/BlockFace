@@ -6,17 +6,15 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  coverBaseView,
-  isCoverBaseView,
-  MAX_BASE_SCALE,
-  MIN_BASE_SCALE,
+  MAX_ZOOM,
+  MIN_ZOOM,
   normalizeWheelDelta,
   ROTATE_PER_NOTCH,
   scaleSizeBy,
   tidyAngle,
   wheelRotation,
   wheelZoomFactor,
-  zoomBaseView,
+  zoomViewAt,
   ZOOM_PER_NOTCH,
 } from './gesture';
 
@@ -92,70 +90,71 @@ describe('滚轮改尺寸', () => {
   });
 });
 
-describe('底图摆放', () => {
-  it('底图与画布同尺寸时是 100%、左上对齐', () => {
-    expect(coverBaseView(1280, 800, 1280, 800)).toEqual({ x: 0, y: 0, scale: 1 });
+describe('以光标为锚点缩放画布视图', () => {
+  // 照真实布局来算：画布在舞台里居中（居中位置随尺寸变化），view.x/y 是叠加的平移
+  const WRAP_W = 1000;
+  const WRAP_H = 700;
+  const DOC_W = 800;
+  const DOC_H = 600;
+  const sizeOf = (zoom: number) => ({ width: DOC_W * zoom, height: DOC_H * zoom });
+  const leftOf = (view: { zoom: number; x: number }) => (WRAP_W - sizeOf(view.zoom).width) / 2 + view.x;
+  const topOf = (view: { zoom: number; y: number }) => (WRAP_H - sizeOf(view.zoom).height) / 2 + view.y;
+  const docAt = (view: { zoom: number; x: number; y: number }, cursor: { x: number; y: number }) => ({
+    x: (cursor.x - leftOf(view)) / view.zoom,
+    y: (cursor.y - topOf(view)) / view.zoom,
+  });
+  const offsetOf = (view: { zoom: number; x: number; y: number }, cursor: { x: number; y: number }) => ({
+    x: cursor.x - leftOf(view),
+    y: cursor.y - topOf(view),
   });
 
-  it('长宽比不同时按 cover 铺满并居中', () => {
-    // 400×800 的竖图放进 800×400 的横画布：宽度是瓶颈，放大 2 倍，超出的高度上下各切一半
-    const view = coverBaseView(400, 800, 800, 400);
-    expect(view.scale).toBeCloseTo(2, 6);
-    expect(view.x).toBeCloseTo(0, 6);
-    expect(view.y).toBeCloseTo((400 - 1600) / 2, 6);
+  it('光标底下的内容停在原地', () => {
+    const view = { zoom: 1, x: 0, y: 0 };
+    const cursor = { x: 500, y: 320 };
+    const before = docAt(view, cursor);
+
+    const after = zoomViewAt(view, offsetOf(view, cursor), sizeOf(view.zoom), 2);
+    const now = docAt(after, cursor);
+
+    expect(after.zoom).toBe(2);
+    expect(now.x).toBeCloseTo(before.x, 6);
+    expect(now.y).toBeCloseTo(before.y, 6);
   });
 
-  it('横向宽出画布时同样居中（另一条瓶颈边）', () => {
-    // 1000×500 的横图放进 500×500 的方画布：高度违反直觉但确实是瓶颈，缩放 1 倍，左右各切一半
-    const view = coverBaseView(1000, 500, 500, 500);
-    expect(view.scale).toBeCloseTo(1, 6);
-    expect(view.x).toBeCloseTo((500 - 1000) / 2, 6);
-    expect(view.y).toBeCloseTo(0, 6);
+  it('在已经平移过、且倍率不是 1 的视图上缩放，锚点依然不动', () => {
+    const view = { zoom: 1.5, x: -120, y: 64 };
+    const cursor = { x: 260, y: 180 };
+    const before = docAt(view, cursor);
+
+    const after = zoomViewAt(view, offsetOf(view, cursor), sizeOf(view.zoom), 1 / 1.12);
+    expect(docAt(after, cursor).x).toBeCloseTo(before.x, 6);
+    expect(docAt(after, cursor).y).toBeCloseTo(before.y, 6);
   });
 
-  it('尺寸不合法时退回原样，不产生 NaN', () => {
-    expect(coverBaseView(0, 100, 800, 600)).toEqual({ x: 0, y: 0, scale: 1 });
+  it('连着滚两格，锚点始终不动（等于一次两格）', () => {
+    const start = { zoom: 1, x: 0, y: 0 };
+    const cursor = { x: 300, y: 200 };
+
+    const first = zoomViewAt(start, offsetOf(start, cursor), sizeOf(start.zoom), 1.12);
+    const second = zoomViewAt(first, offsetOf(first, cursor), sizeOf(first.zoom), 1.12);
+    const both = zoomViewAt(start, offsetOf(start, cursor), sizeOf(start.zoom), 1.12 * 1.12);
+
+    expect(second.zoom).toBeCloseTo(both.zoom, 6);
+    expect(second.x).toBeCloseTo(both.x, 6);
+    expect(second.y).toBeCloseTo(both.y, 6);
+    expect(docAt(second, cursor).x).toBeCloseTo(docAt(start, cursor).x, 6);
   });
 
-  it('认得出来"还在原来那个位置"', () => {
-    expect(isCoverBaseView({ x: 0, y: 0, scale: 1 }, 1280, 800, 1280, 800)).toBe(true);
-    expect(isCoverBaseView({ x: 0, y: 0, scale: 1.5 }, 1280, 800, 1280, 800)).toBe(false);
-    expect(isCoverBaseView({ x: 40, y: 0, scale: 1 }, 1280, 800, 1280, 800)).toBe(false);
-  });
-});
-
-describe('以光标为锚点缩放底图', () => {
-  it('光标下的那个像素停在原地', () => {
-    const before = { x: 0, y: 0, scale: 1 };
-    const anchor = { x: 300, y: 200 };
-    const after = zoomBaseView(before, anchor, 2);
-    expect(after.scale).toBe(2);
-    // 锚点在图片坐标系里的位置（相对左上角除以缩放）不变
-    expect((anchor.x - after.x) / after.scale).toBeCloseTo((anchor.x - before.x) / before.scale, 6);
-    expect((anchor.y - after.y) / after.scale).toBeCloseTo((anchor.y - before.y) / before.scale, 6);
-  });
-
-  it('连续两次缩放等于一次两格', () => {
-    const start = { x: 12, y: -8, scale: 1 };
-    const once = zoomBaseView(zoomBaseView(start, { x: 100, y: 100 }, 1.12), { x: 100, y: 100 }, 1.12);
-    const twice = zoomBaseView(start, { x: 100, y: 100 }, 1.12 * 1.12);
-    expect(once.scale).toBeCloseTo(twice.scale, 6);
-    expect(once.x).toBeCloseTo(twice.x, 6);
-    expect(once.y).toBeCloseTo(twice.y, 6);
-  });
-
-  it('缩放被上下限夹住，锚点不会因此漂移', () => {
-    const huge = zoomBaseView({ x: 0, y: 0, scale: MAX_BASE_SCALE }, { x: 50, y: 50 }, 2);
-    expect(huge.scale).toBe(MAX_BASE_SCALE);
-    expect(huge.x).toBe(0);
-    const tiny = zoomBaseView({ x: 0, y: 0, scale: MIN_BASE_SCALE }, { x: 50, y: 50 }, 0.5);
-    expect(tiny.scale).toBe(MIN_BASE_SCALE);
-    expect(tiny.x).toBe(0);
+  it('缩放到上下限就停住，平移也不会跟着漂', () => {
+    const huge = zoomViewAt({ zoom: MAX_ZOOM, x: 12, y: -8 }, { x: 100, y: 100 }, { width: 100, height: 100 }, 2);
+    expect(huge).toEqual({ zoom: MAX_ZOOM, x: 12, y: -8 });
+    const tiny = zoomViewAt({ zoom: MIN_ZOOM, x: 12, y: -8 }, { x: 100, y: 100 }, { width: 100, height: 100 }, 0.5);
+    expect(tiny).toEqual({ zoom: MIN_ZOOM, x: 12, y: -8 });
   });
 
   it('不改变入参本身', () => {
-    const view = { x: 1, y: 2, scale: 1 };
-    zoomBaseView(view, { x: 10, y: 10 }, 2);
-    expect(view).toEqual({ x: 1, y: 2, scale: 1 });
+    const view = { zoom: 1, x: 5, y: 6 };
+    zoomViewAt(view, { x: 10, y: 10 }, { width: 100, height: 100 }, 2);
+    expect(view).toEqual({ zoom: 1, x: 5, y: 6 });
   });
 });

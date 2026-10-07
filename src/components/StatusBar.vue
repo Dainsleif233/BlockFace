@@ -7,11 +7,9 @@ const zoomLabel = computed(() =>
   editor.view.autoFit ? '适应窗口' : Math.round(editor.view.zoom * 100) + '%',
 );
 const activeRecord = computed(() => editor.skins.find((s) => s.id === editor.activeSkinId) ?? null);
-const baseLabel = computed(() => {
-  if (!editor.baseImage) return '未设置';
-  const percent = Math.round(editor.baseView.scale * 100);
-  return editor.baseImage.width + ' × ' + editor.baseImage.height + ' · ' + percent + '%';
-});
+const baseLabel = computed(() =>
+  editor.baseImage ? editor.baseImage.width + ' × ' + editor.baseImage.height : '未设置',
+);
 const skinLabel = computed(() => {
   const record = activeRecord.value;
   if (!record) return '未选皮肤';

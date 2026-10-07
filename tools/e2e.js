@@ -600,8 +600,8 @@ store.undo();
 await sleep(300);
 check('整次拖动只占一条历史', editor.layers.map((l) => l.id).join(',') === orderBeforeDrag, afterDrag + ' → ' + editor.layers.map((l) => l.id).join(','));
 
-// ============ 10. 滚轮与底图：缩放、旋转、移动、悬浮名称 ============
-// 干净的舞台：1280×800 的底图（左上角一块红，用来看底图是不是真动了）+ 一个头像
+// ============ 10. 滚轮：改头像 / 改画布视图；画布可平移；悬浮显示名称 ============
+// 干净的舞台：1280×800 的底图 + 一个 200px 的头像
 store.clearBaseImage();
 for (const item of [...editor.layers]) store.removeLayer(item.id);
 await sleep(400);
@@ -616,9 +616,9 @@ wbx.fillRect(0, 0, 320, 200);
 const wheelBlob = await new Promise((r) => wheelBase.toBlob(r, 'image/png'));
 await store.setBaseImage(new File([wheelBlob], '滚轮底图.png', { type: 'image/png' }));
 await sleep(700);
-check('底图和画布一样大时躺在 100%、左上对齐',
-  editor.baseView.x === 0 && editor.baseView.y === 0 && editor.baseView.scale === 1,
-  JSON.stringify({ x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale }));
+check('载入底图后回到适应窗口、平移归零',
+  editor.view.autoFit === true && editor.view.x === 0 && editor.view.y === 0,
+  JSON.stringify({ autoFit: editor.view.autoFit, x: editor.view.x, y: editor.view.y }));
 
 store.addAvatar();
 await sleep(400);
@@ -637,6 +637,11 @@ const fireWheel = (x, y, deltaY, shift) => {
     shiftKey: !!shift, bubbles: true, cancelable: true,
   }));
 };
+/** 屏幕上某点当前压着的文档坐标 */
+const docUnder = (clientX, clientY, rect) => [
+  (clientX - rect.left - 1) / ((rect.width - 2) / editor.document.width),
+  (clientY - rect.top - 1) / ((rect.height - 2) / editor.document.height),
+];
 const avatar = editor.layers[0];
 const size0 = avatar.size;
 
@@ -660,67 +665,71 @@ await sleep(520);
 check('Shift + 滚轮 = 旋转，一格 5 度', editor.layers[0].rotation === 5, 'rotation=' + editor.layers[0].rotation);
 fireWheel(avatar.x, avatar.y, -100, true);
 await sleep(520);
-check('再滚一格 = 10 度', editor.layers[0].rotation === 10, 'rotation=' + editor.layers[0].rotation);
 store.undo();
 await sleep(320);
 store.undo();
 await sleep(320);
 check('两格滚轮 = 两条历史，撤销两次回到 0 度', editor.layers[0].rotation === 0, 'rotation=' + editor.layers[0].rotation);
 
-const anchor = { x: 200, y: 150 };
-const viewBeforeWheel = { x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale };
-fireWheel(anchor.x, anchor.y, -100);
-await sleep(520);
-const relOf = (view, point) => [(point.x - view.x) / view.scale, (point.y - view.y) / view.scale];
-const relBefore = relOf(viewBeforeWheel, anchor);
-const relAfter = relOf(editor.baseView, anchor);
-check('滚轮打在底图上 = 缩放底图（不是缩放头像）',
-  Math.abs(editor.baseView.scale - 1.12) < 1e-6 && editor.layers[0].size === size0,
-  '底图 scale=' + editor.baseView.scale.toFixed(4) + '，头像尺寸=' + editor.layers[0].size);
-check('底图缩放锚在光标上：光标底下那个像素没跑',
-  Math.abs(relAfter[0] - relBefore[0]) < 1 && Math.abs(relAfter[1] - relBefore[1]) < 1,
-  '光标处的图片坐标 ' + relBefore.map((v) => v.toFixed(1)).join(',') + ' → ' + relAfter.map((v) => v.toFixed(1)).join(','));
+// 空白处滚轮 = 缩放画布视图（画布整体在屏幕上变大变小，锚在光标）
+const rectBeforeZoom = document.querySelector('.artboard').getBoundingClientRect();
+const anchorPoint = toScreen(200, 150);
+const docBeforeZoom = docUnder(anchorPoint[0], anchorPoint[1], rectBeforeZoom);
+const sizeBeforeZoom = editor.layers[0].size;
+fireWheel(200, 150, -100);
+await sleep(420);
+const rectAfterZoom = document.querySelector('.artboard').getBoundingClientRect();
+const docAfterZoom = docUnder(anchorPoint[0], anchorPoint[1], rectAfterZoom);
+check('空白处滚轮 = 缩放画布视图，不碰头像',
+  rectAfterZoom.width > rectBeforeZoom.width + 20 && editor.layers[0].size === sizeBeforeZoom,
+  '画布宽 ' + Math.round(rectBeforeZoom.width) + ' → ' + Math.round(rectAfterZoom.width) + '，头像尺寸=' + editor.layers[0].size);
+check('视图缩放锚在光标上：光标底下那个文档位置没跑',
+  Math.abs(docAfterZoom[0] - docBeforeZoom[0]) <= 2 && Math.abs(docAfterZoom[1] - docBeforeZoom[1]) <= 2,
+  '光标处的文档坐标 ' + docBeforeZoom.map((v) => v.toFixed(1)).join(',') + ' → ' + docAfterZoom.map((v) => v.toFixed(1)).join(','));
+check('缩放的是视图倍率，文档尺寸一点没变',
+  editor.view.autoFit === false && editor.document.width === 1280 && editor.document.height === 800,
+  'autoFit=' + editor.view.autoFit + ' zoom=' + editor.view.zoom.toFixed(3) + ' 文档=' + editor.document.width + '×' + editor.document.height);
 
-const panStart = toScreen(300, 620);
-const panBefore = { x: editor.baseView.x, y: editor.baseView.y };
-const avatarPos = { x: editor.layers[0].x, y: editor.layers[0].y };
+// 空白处拖动 = 整个画布在屏幕上平移
+const panRect = document.querySelector('.artboard').getBoundingClientRect();
+const panStart = [panRect.left + 40, panRect.top + panRect.height - 40];
+const layerPos = { x: editor.layers[0].x, y: editor.layers[0].y };
+const viewBeforePan = { x: editor.view.x, y: editor.view.y };
 const panPx = (type, cx, cy) => new PointerEvent(type, {
-  pointerId: 31, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true,
+  pointerId: 41, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true,
   clientX: cx, clientY: cy, buttons: type === 'pointerup' ? 0 : 1,
 });
-const docPixelAt = (x, y) => {
-  const board = document.querySelector('.artboard__doc');
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  return Array.from(board.getContext('2d').getImageData(Math.round(x * wheelScale * ratio), Math.round(y * wheelScale * ratio), 1, 1).data);
-};
-const redBefore = docPixelAt(10, 10);
 wheelWrap.dispatchEvent(panPx('pointerdown', panStart[0], panStart[1]));
-wheelWrap.dispatchEvent(panPx('pointermove', panStart[0] + 70, panStart[1] + 50));
-wheelWrap.dispatchEvent(panPx('pointerup', panStart[0] + 70, panStart[1] + 50));
-await sleep(400);
-check('拖动底图 = 底图位移，头像原地不动',
-  Math.abs(editor.baseView.x - panBefore.x - 70 / wheelScale) <= 2 &&
-    Math.abs(editor.baseView.y - panBefore.y - 50 / wheelScale) <= 2 &&
-    editor.layers[0].x === avatarPos.x && editor.layers[0].y === avatarPos.y,
-  '底图 (' + editor.baseView.x + ',' + editor.baseView.y + ') 期望≈(' + Math.round(panBefore.x + 70 / wheelScale) + ',' + Math.round(panBefore.y + 50 / wheelScale) + ')，头像 ' + editor.layers[0].x + ',' + editor.layers[0].y);
-const redAfter = docPixelAt(10, 10);
-check('底图真的在画布上挪了（像素为证）',
-  Math.abs(redBefore[0] - 200) < 14 && Math.abs(redBefore[1] - 64) < 14 &&
-    !(Math.abs(redAfter[0] - 200) < 14 && Math.abs(redAfter[1] - 64) < 14),
-  '左上角像素 ' + JSON.stringify(redBefore) + ' → ' + JSON.stringify(redAfter));
+wheelWrap.dispatchEvent(panPx('pointermove', panStart[0] + 90, panStart[1] + 60));
+wheelWrap.dispatchEvent(panPx('pointerup', panStart[0] + 90, panStart[1] + 60));
+await sleep(380);
+const panRectAfter = document.querySelector('.artboard').getBoundingClientRect();
+check('空白处拖动 = 整个画布在屏幕上平移',
+  Math.abs(editor.view.x - viewBeforePan.x - 90) <= 2 && Math.abs(editor.view.y - viewBeforePan.y - 60) <= 2 &&
+    Math.abs(panRectAfter.left - panRect.left - 90) <= 2 && Math.abs(panRectAfter.top - panRect.top - 60) <= 2,
+  'view=(' + editor.view.x + ',' + editor.view.y + ')，画布左上 ' + Math.round(panRect.left) + ' → ' + Math.round(panRectAfter.left));
+check('平移只动屏幕位置，文档内容一点没动',
+  editor.layers[0].x === layerPos.x && editor.layers[0].y === layerPos.y,
+  '头像 ' + editor.layers[0].x + ',' + editor.layers[0].y + '（平移前 ' + layerPos.x + ',' + layerPos.y + '）');
+store.undo();
+await sleep(380);
+check('平移不进撤销历史：撤销动的是文档，画布位置不动',
+  Math.abs(editor.view.x - viewBeforePan.x - 90) <= 2 && Math.abs(editor.view.y - viewBeforePan.y - 60) <= 2,
+  '撤销后 view=(' + editor.view.x + ',' + editor.view.y + ') 期望≈(' + (viewBeforePan.x + 90) + ',' + (viewBeforePan.y + 60) + ')');
 
-const resetBtn = Array.from(document.querySelectorAll('.stage__foot button')).find((b) => b.textContent.trim() === '底图复位');
-check('底图被挪过之后，脚上出现「底图复位」', !!resetBtn, resetBtn ? '有' : '没有');
-if (resetBtn) {
-  resetBtn.click();
+const fitBtn = Array.from(document.querySelectorAll('.stage__zoombar button')).find((b) => b.textContent.trim() === '适应窗口');
+check('工具栏上有「适应窗口」可以一键复位', !!fitBtn, fitBtn ? '有' : '没有');
+if (fitBtn) {
+  fitBtn.click();
   await sleep(450);
 }
-check('复位 = 回到 100% 且左上对齐',
-  editor.baseView.x === 0 && editor.baseView.y === 0 && editor.baseView.scale === 1,
-  JSON.stringify({ x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale }));
-check('复位之后按钮自己收起来', !document.querySelector('.stage__foot .stage__reset'), document.querySelector('.stage__foot .stage__reset') ? '还在' : '收起了');
+check('适应窗口把平移清零、回到自适应倍率',
+  editor.view.autoFit === true && editor.view.x === 0 && editor.view.y === 0,
+  JSON.stringify({ autoFit: editor.view.autoFit, x: editor.view.x, y: editor.view.y }));
 
-const hoverPoint = toScreen(editor.layers[0].x, editor.layers[0].y);
+const finalRect = document.querySelector('.artboard').getBoundingClientRect();
+const finalScale = (finalRect.width - 2) / editor.document.width;
+const hoverPoint = [finalRect.left + editor.layers[0].x * finalScale, finalRect.top + editor.layers[0].y * finalScale];
 const movePointer = (cx, cy) => wheelWrap.dispatchEvent(new PointerEvent('pointermove', {
   pointerId: 32, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true, clientX: cx, clientY: cy,
 }));
@@ -735,10 +744,13 @@ const tipRect = tipEl ? tipEl.getBoundingClientRect() : { left: -999, top: -999 
 check('名字条贴在光标右下方',
   Math.abs(tipRect.left - (hoverPoint[0] + 14)) <= 2 && Math.abs(tipRect.top - (hoverPoint[1] + 16)) <= 2,
   'left=' + Math.round(tipRect.left) + ' top=' + Math.round(tipRect.top) + '，光标=' + hoverPoint.map((v) => Math.round(v)).join(','));
+check('指着头像时光标是「移动」，指空白处是「抓手」',
+  wheelWrap.dataset.cursor === 'move', 'data-cursor=' + wheelWrap.dataset.cursor);
 const emptyPoint = toScreen(60, 760);
 movePointer(emptyPoint[0], emptyPoint[1]);
 await sleep(280);
 check('光标挪到没头像的地方，名字条消失', !document.querySelector('.stage__tip'), document.querySelector('.stage__tip') ? '还在' : '消失了');
+check('空白处的光标变成抓手的样式', wheelWrap.dataset.cursor === 'grab', 'data-cursor=' + wheelWrap.dataset.cursor);
 
 // ============ 11. 批量添加 ============
 // 真实文件走真实入口：把内置贴图取回来做成 3 个 File，一次性交给「上传皮肤」

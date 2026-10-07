@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { AvatarLayer, HandleName } from '../core/model/types';
-import { wheelRotation, wheelZoomFactor } from '../core/model/gesture';
+import { wheelRotation, wheelZoomFactor, zoomViewAt } from '../core/model/gesture';
 import {
   allHandlePositions,
   clampLayerToDocument,
@@ -15,17 +15,15 @@ import {
 import { composeDocument } from '../core/render/compose';
 import type { SkinTexture } from '../core/skin/texture';
 import {
-  baseViewIsDefault,
   beginChange,
   editor,
   endChange,
+  fitView,
   getBaseImage,
   getSkin,
-  resetBaseView,
   rotateLayerBy,
   scaleLayerBy,
   selectLayer,
-  zoomBaseAt,
 } from '../stores/editor';
 
 /** 旋转手柄离顶边的屏幕距离 */
@@ -48,6 +46,8 @@ const overlayCanvas = ref<HTMLCanvasElement | null>(null);
 /** 悬浮名字条的最大外框（用来把它夹在画布里，不让它被裁掉） */
 const TIP_WIDTH = 220;
 const TIP_HEIGHT = 30;
+/** 鼠标移动超过这么多屏幕像素才算"在平移画布"，而不是点了一下 */
+const PAN_THRESHOLD = 4;
 
 const wrapSize = ref({ w: 960, h: 620 });
 let resizeObserver: ResizeObserver | null = null;
@@ -56,12 +56,17 @@ type Drag =
   | { kind: 'move'; id: string; originX: number; originY: number; layerX: number; layerY: number }
   | { kind: 'resize'; id: string; handle: Exclude<HandleName, 'rotate'> }
   | { kind: 'rotate'; id: string }
-  | { kind: 'pan'; originX: number; originY: number; viewX: number; viewY: number; clientX: number; clientY: number; moved: boolean };
+  | { kind: 'pan'; clientX: number; clientY: number; viewX: number; viewY: number; moved: boolean };
 
 let drag: Drag | null = null;
 
 /** 悬浮在头像上时跟着光标走的名字条 */
 const hover = ref<{ name: string; x: number; y: number } | null>(null);
+/** 光标现在是不是停在头像上（决定光标形状） */
+const overLayer = ref(false);
+/** 是不是正在平移画布：画布整体在屏幕上移动，文档内容一点不动 */
+const panning = ref(false);
+const cursor = computed(() => (panning.value ? 'grabbing' : overLayer.value ? 'move' : 'grab'));
 
 const fitScale = computed(() => {
   const pad = 44;
@@ -73,17 +78,17 @@ const fitScale = computed(() => {
 const viewScale = computed(() => (editor.view.autoFit ? fitScale.value : editor.view.zoom));
 const zoomPercent = computed(() => Math.round(viewScale.value * 100));
 
+/** 画布尺寸按视图缩放算，位置靠 translate 平移 —— 平移只动屏幕上的位置，不动文档 */
 const stageStyle = computed(() => ({
   width: editor.document.width * viewScale.value + 'px',
   height: editor.document.height * viewScale.value + 'px',
+  transform: 'translate(' + editor.view.x + 'px, ' + editor.view.y + 'px)',
 }));
 
 const selected = computed(() => editor.layers.find((l) => l.id === editor.selectedId) ?? null);
-const baseChip = computed(() => {
-  if (!editor.baseImage) return '未设置（导出透明底）';
-  const percent = Math.round(editor.baseView.scale * 100);
-  return editor.baseImage.width + ' × ' + editor.baseImage.height + ' · ' + percent + '%';
-});
+const baseChip = computed(() =>
+  editor.baseImage ? editor.baseImage.width + ' × ' + editor.baseImage.height : '未设置（导出透明底）',
+);
 
 const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
 
@@ -114,10 +119,10 @@ function renderDocument(): void {
     width: editor.document.width,
     height: editor.document.height,
     scale: viewScale.value * dpr(),
-    base: baseImage ? { image: baseImage, ...editor.baseView } : null,
+    baseImage,
     items,
-    // 预览一直铺棋盘：底图被挪开或缩小时露出来的地方，就是导出时的透明区域
-    checkerboard: true,
+    // 没有底图时预览铺棋盘：那块地方导出就是透明的
+    checkerboard: !baseImage,
   });
 }
 
@@ -258,25 +263,18 @@ function onPointerDown(event: PointerEvent): void {
     return;
   }
 
-  if (editor.baseImage) {
-    // 底图上按住拖动 = 挪底图（头像优先，所以只有没点到头像时才轮到它）。
-    // 真动起来才记历史：原地按一下不该占掉一格撤销。
-    drag = {
-      kind: 'pan',
-      originX: point.x,
-      originY: point.y,
-      viewX: editor.baseView.x,
-      viewY: editor.baseView.y,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      moved: false,
-    };
-    capturePointer(event);
-    event.preventDefault();
-    return;
-  }
-
-  selectLayer(null);
+  // 空白处（或底图上）按住拖动 = 平移画布视图：画布整体在屏幕上移动，文档内容一点不动。
+  // 视图不属于文档，所以这里不收历史；原地按一下仍然是"点空白取消选中"。
+  drag = {
+    kind: 'pan',
+    clientX: event.clientX,
+    clientY: event.clientY,
+    viewX: editor.view.x,
+    viewY: editor.view.y,
+    moved: false,
+  };
+  capturePointer(event);
+  event.preventDefault();
 }
 
 function onPointerMove(event: PointerEvent): void {
@@ -289,15 +287,20 @@ function onPointerMove(event: PointerEvent): void {
   const point = toDocumentPoint(event);
 
   if (active.kind === 'pan') {
-    // 手抖不算拖动：不挪底图，也不占一格历史
     if (!active.moved) {
-      if (Math.hypot(event.clientX - active.clientX, event.clientY - active.clientY) < 4) return;
+      // 手抖不算拖动，免得点一下就以为画布飘了
+      if (Math.hypot(event.clientX - active.clientX, event.clientY - active.clientY) < PAN_THRESHOLD) return;
       active.moved = true;
-      beginChange();
+      panning.value = true;
+      // 一旦手动平移就不再是"适应窗口"：先把当前倍率固定下来，画布不会突然跳大小
+      if (editor.view.autoFit) {
+        editor.view.zoom = fitScale.value;
+        editor.view.autoFit = false;
+      }
     }
-    editor.baseView.x = Math.round(active.viewX + (point.x - active.originX));
-    editor.baseView.y = Math.round(active.viewY + (point.y - active.originY));
-    schedule();
+    editor.view.x = Math.round(active.viewX + (event.clientX - active.clientX));
+    editor.view.y = Math.round(active.viewY + (event.clientY - active.clientY));
+    // 平移是纯 CSS transform，画布内容一个像素都不用重画
     return;
   }
 
@@ -328,6 +331,7 @@ function updateHover(event: PointerEvent): void {
   const rect = wrap.value?.getBoundingClientRect();
   if (!rect) return;
   const target = hitTopLayer(toDocumentPoint(event));
+  overLayer.value = target !== null;
   if (!target) {
     hover.value = null;
     return;
@@ -342,6 +346,7 @@ function updateHover(event: PointerEvent): void {
 
 function clearHover(): void {
   hover.value = null;
+  overLayer.value = false;
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -349,9 +354,9 @@ function onPointerUp(event: PointerEvent): void {
   if (!active) return;
   drag = null;
   if (active.kind === 'pan') {
-    // 在底图上按一下没拖动 —— 那就是原来"点空白取消选中"的意思
-    if (active.moved) endChange();
-    else selectLayer(null);
+    panning.value = false;
+    // 按一下没拖动 —— 那就是"点空白取消选中"
+    if (!active.moved) selectLayer(null);
   } else {
     endChange();
   }
@@ -365,54 +370,58 @@ function onPointerUp(event: PointerEvent): void {
 
 /**
  * 滚轮的分工：
- * - Ctrl/⌘ + 滚轮（含触控板捏合）→ 缩放视图本身，这是原有行为，保留
- * - 光标落在头像上 → 缩放该头像；按住 Shift → 旋转它
- * - 光标落在底图/空白上 → 缩放底图，锚在光标底下那个像素
- * - 连底图都没有 → 退回缩放视图，免得滚了毫无反应
+ * - 光标落在头像上 → 缩放这个头像；按住 Shift → 旋转它（改的是文档内容，进撤销历史）
+ * - 其它情况（底图上、空白处、按住 Ctrl/⌘ 或捏合触控板）→ 缩放**画布视图**本身，
+ *   锚点是光标：光标底下那块内容缩放前后停在原地，所以能一直盯着要修的地方放大
  *
  * 真实鼠标按住 Shift 滚轮时，Chrome 会把读数搬到 deltaX 上，所以先补回来。
  */
 function onWheel(event: WheelEvent): void {
   const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
   const unit = event.deltaMode;
+  const factor = wheelZoomFactor(delta, unit);
 
-  if (event.ctrlKey || event.metaKey) {
-    event.preventDefault();
-    zoomBy(delta < 0 ? 1.1 : 1 / 1.1);
-    return;
-  }
-
-  const point = toDocumentPoint(event);
-  const target = hitTopLayer(point);
-
-  if (target) {
-    event.preventDefault();
-    // 滚轮改的是这个头像，顺手选中它：属性面板与手柄都会跟着切过去
-    if (editor.selectedId !== target.id) selectLayer(target.id);
-    if (event.shiftKey) rotateLayerBy(target.id, wheelRotation(delta, unit));
-    else scaleLayerBy(target.id, wheelZoomFactor(delta, unit));
-    schedule();
-    return;
-  }
-
-  if (editor.baseImage) {
-    event.preventDefault();
-    zoomBaseAt(point, wheelZoomFactor(delta, unit));
-    schedule();
-    return;
+  if (!event.ctrlKey && !event.metaKey) {
+    const target = hitTopLayer(toDocumentPoint(event));
+    if (target) {
+      event.preventDefault();
+      // 滚轮改的是这个头像，顺手选中它：属性面板与手柄都会跟着切过去
+      if (editor.selectedId !== target.id) selectLayer(target.id);
+      if (event.shiftKey) rotateLayerBy(target.id, wheelRotation(delta, unit));
+      else scaleLayerBy(target.id, factor);
+      schedule();
+      return;
+    }
   }
 
   event.preventDefault();
-  zoomBy(delta < 0 ? 1.1 : 1 / 1.1);
+  zoomAtCursor(factor, event.clientX, event.clientY);
 }
 
-function zoomBy(factor: number): void {
-  editor.view.zoom = Math.min(6, Math.max(0.05, viewScale.value * factor));
+/** 以某个屏幕点为锚点缩放画布视图：锚点底下的内容停在原地 */
+function zoomAtCursor(factor: number, clientX: number, clientY: number): void {
+  const rect = stage.value?.getBoundingClientRect();
+  if (!rect) return;
+  const next = zoomViewAt(
+    { zoom: viewScale.value, x: editor.view.x, y: editor.view.y },
+    { x: clientX - rect.left, y: clientY - rect.top },
+    { width: editor.document.width * viewScale.value, height: editor.document.height * viewScale.value },
+    factor,
+  );
+  editor.view.zoom = next.zoom;
+  editor.view.x = next.x;
+  editor.view.y = next.y;
   editor.view.autoFit = false;
 }
 
+/** 工具栏上的放大 / 缩小：锚在画布可见区域的中心 */
+function zoomBy(factor: number): void {
+  const box = wrap.value?.getBoundingClientRect();
+  zoomAtCursor(factor, box ? box.left + box.width / 2 : 0, box ? box.top + box.height / 2 : 0);
+}
+
 function fit(): void {
-  editor.view.autoFit = true;
+  fitView();
 }
 
 function onKeyDown(event: KeyboardEvent): void {
@@ -482,7 +491,6 @@ watch(
     editor.document.height,
     editor.selectedId,
     editor.baseImageId,
-    editor.baseView,
     editor.layers,
     editor.skinRevision,
     viewScale.value,
@@ -517,6 +525,7 @@ defineExpose({ schedule });
     <div
       ref="wrap"
       class="stage__body"
+      :data-cursor="cursor"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
@@ -538,16 +547,7 @@ defineExpose({ schedule });
 
     <div class="stage__foot">
       <span class="bf-chip bf-chip--dark">头像 拖动 · 滚轮缩放 · Shift+滚轮旋转</span>
-      <span class="bf-chip bf-chip--dark">底图 拖动 · 滚轮缩放</span>
-      <button
-        v-if="!baseViewIsDefault"
-        class="bf-btn bf-btn--sm bf-btn--quiet stage__reset"
-        type="button"
-        title="把底图放回刚打开时的位置与大小"
-        @click="resetBaseView"
-      >
-        底图复位
-      </button>
+      <span class="bf-chip bf-chip--dark">画布 拖动平移 · 滚轮缩放 · 适应窗口复位</span>
     </div>
   </section>
 </template>
@@ -619,7 +619,10 @@ defineExpose({ schedule });
   white-space: nowrap;
 }
 
-.stage__reset { margin-left: auto; }
+/* 画布是可以平移的：空白处是抓手、指着头像时是移动、正在平移时抓紧 */
+.stage__body { cursor: grab; }
+.stage__body[data-cursor='move'] { cursor: move; }
+.stage__body[data-cursor='grabbing'] { cursor: grabbing; }
 
 .stage__tip {
   position: absolute;

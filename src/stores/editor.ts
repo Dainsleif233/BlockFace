@@ -17,14 +17,7 @@ import {
   type PresetLayer,
   type PresetSkin,
 } from '../core/model/preset';
-import {
-  coverBaseView,
-  isCoverBaseView,
-  scaleSizeBy,
-  tidyAngle,
-  zoomBaseView,
-  type BaseView,
-} from '../core/model/gesture';
+import { scaleSizeBy, tidyAngle } from '../core/model/gesture';
 import { clampLayerToDocument } from '../core/model/transform';
 import { createId, MIN_LAYER_SIZE, type AvatarLayer, type BaseImageMeta } from '../core/model/types';
 import { composeDocument } from '../core/render/compose';
@@ -78,7 +71,6 @@ export interface Notice {
 interface Snapshot {
   document: { width: number; height: number };
   baseImageId: string | null;
-  baseView: BaseView;
   layers: AvatarLayer[];
   selectedId: string | null;
   activeSkinId: string | null;
@@ -88,14 +80,13 @@ interface EditorState {
   document: { width: number; height: number };
   baseImage: BaseImageMeta | null;
   baseImageId: string | null;
-  /** 底图在文档里的摆放（位置 + 缩放）：滚轮与拖动改的就是它 */
-  baseView: BaseView;
   skins: SkinRecord[];
   activeSkinId: string | null;
   presets: Preset[];
   layers: AvatarLayer[];
   selectedId: string | null;
-  view: { zoom: number; autoFit: boolean };
+  /** 画布视图：缩放倍率 + 平移（屏幕像素）。它只是"看得方便"，不属于文档内容，所以不进历史 */
+  view: { zoom: number; autoFit: boolean; x: number; y: number };
   busy: string | null;
   notice: Notice | null;
   showGrid: boolean;
@@ -111,13 +102,12 @@ const state = reactive<EditorState>({
   document: { ...DEFAULT_DOCUMENT },
   baseImage: null,
   baseImageId: null,
-  baseView: { x: 0, y: 0, scale: 1 },
   skins: [],
   activeSkinId: null,
   presets: [],
   layers: [],
   selectedId: null,
-  view: { zoom: 1, autoFit: true },
+  view: { zoom: 1, autoFit: true, x: 0, y: 0 },
   busy: null,
   notice: null,
   showGrid: false,
@@ -147,7 +137,6 @@ function snapshot(): Snapshot {
   return {
     document: { ...state.document },
     baseImageId: state.baseImageId,
-    baseView: { ...state.baseView },
     layers: state.layers.map((l) => ({ ...l })),
     selectedId: state.selectedId,
     activeSkinId: state.activeSkinId,
@@ -158,7 +147,6 @@ function restore(snap: Snapshot): void {
   state.document = { ...snap.document };
   state.baseImageId = snap.baseImageId;
   state.baseImage = snap.baseImageId ? readBaseMeta(snap.baseImageId) : null;
-  state.baseView = { ...snap.baseView };
   state.layers = snap.layers.map((l) => ({ ...l }));
   state.selectedId = snap.selectedId;
   state.activeSkinId = snap.activeSkinId;
@@ -593,13 +581,12 @@ export async function setBaseImage(file: File): Promise<void> {
       state.baseImageId = id;
       state.baseImage = meta;
       state.document = { width: loaded.width, height: loaded.height };
-      state.baseView = coverBaseView(loaded.width, loaded.height, state.document.width, state.document.height);
       for (const layer of state.layers) {
         const next = clampLayerToDocument(layer, state.document.width, state.document.height);
         layer.x = next.x;
         layer.y = next.y;
       }
-      state.view.autoFit = true;
+      fitView();
       notify('success', `已载入底图 ${meta.name}（${meta.width}×${meta.height}）`);
     } finally {
       URL.revokeObjectURL(url);
@@ -615,36 +602,17 @@ export function clearBaseImage(): void {
   commit();
   state.baseImageId = null;
   state.baseImage = null;
-  state.baseView = { x: 0, y: 0, scale: 1 };
   state.document = { ...DEFAULT_DOCUMENT };
 }
 
-function baseImageSize(image: HTMLImageElement): { width: number; height: number } {
-  return { width: image.naturalWidth || image.width, height: image.naturalHeight || image.height };
-}
-
-/** 底图是不是还停在"刚打开图片"的位置 —— 不是的话界面上才出现「底图复位」 */
-export const baseViewIsDefault = computed(() => {
-  const image = getBaseImage(state.baseImageId);
-  if (!image) return true;
-  const { width, height } = baseImageSize(image);
-  return isCoverBaseView(state.baseView, width, height, state.document.width, state.document.height);
-});
-
-/** 滚轮缩放底图：以光标为锚点，光标底下那个像素缩放前后停在原地 */
-export function zoomBaseAt(point: { x: number; y: number }, factor: number): void {
-  if (!getBaseImage(state.baseImageId)) return;
-  beginWheelChange();
-  state.baseView = zoomBaseView(state.baseView, point, factor);
-}
-
-/** 把底图放回刚打开时的位置与大小 */
-export function resetBaseView(): void {
-  const image = getBaseImage(state.baseImageId);
-  if (!image) return;
-  const { width, height } = baseImageSize(image);
-  commit();
-  state.baseView = coverBaseView(width, height, state.document.width, state.document.height);
+/**
+ * 回到「适应窗口」：缩放交给组件按窗口尺寸算（autoFit），这里把平移清零。
+ * 视图的缩放与平移只是"看得方便"，不属于文档内容，因此不进撤销历史。
+ */
+export function fitView(): void {
+  state.view.autoFit = true;
+  state.view.x = 0;
+  state.view.y = 0;
 }
 
 export function setDocumentSize(width: number, height: number): void {
@@ -670,7 +638,7 @@ function composeToCanvas(checkerboard: boolean): HTMLCanvasElement | null {
     composeDocument(canvas, {
       width: state.document.width,
       height: state.document.height,
-      base: baseImage ? { image: baseImage, ...state.baseView } : null,
+      baseImage,
       items,
       checkerboard,
     });
@@ -1056,7 +1024,7 @@ export async function applyPreset(id: string): Promise<void> {
     const top = state.layers.at(-1) ?? null;
     state.selectedId = top?.id ?? null;
     if (top) state.activeSkinId = top.skinId;
-    state.view.autoFit = true;
+    fitView();
 
     const skipped = preset.layers.length - ready.length;
     const parts = [`${ready.length} 个头像`, '底图未改动'];

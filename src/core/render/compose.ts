@@ -14,25 +14,16 @@ export interface ComposeItem {
   skin: SkinTexture;
 }
 
-/** 底图的摆放：左上角坐标 + 缩放倍率，单位都是文档像素 */
-export interface BasePlacement {
-  image: CanvasImageSource;
-  /** 左上角（文档坐标） */
-  x: number;
-  y: number;
-  /** 1 = 原始像素大小 */
-  scale: number;
-}
-
 export interface ComposeOptions {
   /** 文档逻辑尺寸 */
   width: number;
   height: number;
   /** 输出倍率，1 = 文档原始分辨率，2 = 二倍图 */
   scale?: number;
-  /** 底图及其摆放：位置与缩放由交互层决定，这里只负责照着画 */
-  base?: BasePlacement | null;
+  baseImage?: CanvasImageSource | null;
   items: ComposeItem[];
+  /** 底图适配方式：默认 cover 铺满画布 */
+  fit?: 'cover' | 'contain';
   /** 预览用的棋盘透明底（导出时关闭） */
   checkerboard?: boolean;
   cache?: HeadCache;
@@ -50,12 +41,21 @@ function drawCheckerboard(ctx: CanvasRenderingContext2D, width: number, height: 
   }
 }
 
-function drawBase(ctx: CanvasRenderingContext2D, base: BasePlacement): void {
-  const source = base.image as HTMLImageElement;
+function drawFitted(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  width: number,
+  height: number,
+  fit: 'cover' | 'contain',
+): void {
+  const source = image as HTMLImageElement;
   const iw = source.naturalWidth || source.width;
   const ih = source.naturalHeight || source.height;
-  if (!iw || !ih || !(base.scale > 0)) return;
-  ctx.drawImage(base.image, base.x, base.y, iw * base.scale, ih * base.scale);
+  if (!iw || !ih) return;
+  const ratio = fit === 'cover' ? Math.max(width / iw, height / ih) : Math.min(width / iw, height / ih);
+  const w = iw * ratio;
+  const h = ih * ratio;
+  ctx.drawImage(image, (width - w) / 2, (height - h) / 2, w, h);
 }
 
 /**
@@ -82,12 +82,8 @@ export function composeDocument(canvas: HTMLCanvasElement, options: ComposeOptio
     drawCheckerboard(ctx, width, height, Math.max(8, Math.round(16 * scale)));
   }
 
-  if (options.base) {
-    // 底图坐标是文档单位，跟着输出倍率一起放大，预览与导出才不会各偏各的
-    ctx.save();
-    ctx.scale(scale, scale);
-    drawBase(ctx, options.base);
-    ctx.restore();
+  if (options.baseImage) {
+    drawFitted(ctx, options.baseImage, width, height, options.fit ?? 'cover');
   }
 
   const cache = options.cache ?? headCache;
