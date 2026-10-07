@@ -36,4 +36,22 @@ await sleep(300);
 store.selectLayer(editor.layers[1].id);
 store.saveCurrentAsPreset();
 await sleep(600);
-return { layers: editor.layers.length, presets: editor.presets.length, document: editor.document.width + '×' + editor.document.height };
+
+// 把光标停在 Alex 头像上，截图上就能看到「悬浮显示名称」这一条
+const rect = document.querySelector('.artboard').getBoundingClientRect();
+const scale = (rect.width - 2) / editor.document.width;
+const hovered = editor.layers[1];
+const wrap = document.querySelector('.stage__body');
+wrap.dispatchEvent(new PointerEvent('pointermove', {
+  pointerId: 77, pointerType: 'mouse', isPrimary: true, bubbles: true, cancelable: true,
+  clientX: Math.round(rect.left + hovered.x * scale), clientY: Math.round(rect.top + hovered.y * scale),
+}));
+await sleep(400);
+const tip = document.querySelector('.stage__tip');
+return {
+  layers: editor.layers.length,
+  presets: editor.presets.length,
+  document: editor.document.width + '×' + editor.document.height,
+  tip: tip ? tip.textContent.trim() : null,
+  baseView: JSON.stringify(editor.baseView),
+};

@@ -11,11 +11,14 @@
  *
  * 真实输入（走 CDP Input 域，是浏览器眼里的"真用户操作"，不是合成事件）：
  *   [--pre "<js>"] [--pre-file <path>]   在输入之前求值，可先备好场景
+ *   [--move  "<js 返回 [x,y]>"]          把鼠标移到该视口坐标（只移动，不按键）
  *   [--click "<js 返回 [x,y]>"]          在该视口坐标点一下
  *   [--drag  "<js 返回 [x1,y1,x2,y2]>"]  从 (x1,y1) 按住拖到 (x2,y2)
  *   [--drag-steps 8]                     拖动分几步走（默认 8）
+ *   [--wheel "<js 返回步骤>"]            真实滚轮，步骤 = [x,y,deltaY,shift?]，也可以传一组步骤
+ *   [--files "<css 选择器>"] [--files-paths "a;b"]  走浏览器的文件选择框给 input[type=file] 塞文件
  *   [--type "文本"]                      向当前焦点插入文本
- *   顺序固定为 pre → click → drag → type → expr，坐标由页面自己算，输入由 CDP 发。
+ *   顺序固定为 pre → move → click → drag → wheel → type → expr，坐标由页面自己算，输入由 CDP 发。
  *
  * 求值表达式若是 async 函数体，可用 `return` 返回结果（自动 await）。
  */
@@ -45,10 +48,14 @@ const exprFile = arg('expr-file', null);
 const exprInline = arg('expr', null);
 const preFile = arg('pre-file', null);
 const preInline = arg('pre', null);
+const moveExpr = arg('move', null);
 const clickExpr = arg('click', null);
+const wheelExpr = arg('wheel', null);
 const dragExpr = arg('drag', null);
 const dragSteps = Number(arg('drag-steps', 8));
 const typeText = arg('type', null);
+const filesSelector = arg('files', null);
+const filesPaths = arg('files-paths', null);
 const asJson = has('json');
 
 const CHROME = process.env.BF_CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -115,12 +122,18 @@ await new Promise((resolve, reject) => {
 
 let nextId = 1;
 const pending = new Map();
+/** 下载事件留痕：既用来等文件落地，也是"文件真的下来了"的证据 */
+const downloadEvents = [];
 ws.addEventListener('message', (event) => {
   let message;
   try { message = JSON.parse(event.data); } catch { return; }
   if (message.id && pending.has(message.id)) {
     pending.get(message.id)(message);
     pending.delete(message.id);
+    return;
+  }
+  if (typeof message.method === 'string' && message.method.startsWith('Browser.download')) {
+    downloadEvents.push(message);
   }
 });
 
@@ -204,6 +217,14 @@ try {
     output.pre = await evaluate('(async () => { ' + expression + ' })()');
   }
 
+  if (moveExpr) {
+    const point = await evaluate(moveExpr);
+    if (!Array.isArray(point) || point.length < 2) throw new Error('--move 需要返回 [x,y]，收到 ' + JSON.stringify(point));
+    await mouse('mouseMoved', point[0], point[1], 0);
+    output.moved = point.slice(0, 2);
+    await sleep(150);
+  }
+
   if (clickExpr) {
     const point = await evaluate(clickExpr);
     if (!Array.isArray(point) || point.length < 2) throw new Error('--click 需要返回 [x,y]，收到 ' + JSON.stringify(point));
@@ -229,6 +250,40 @@ try {
     await sleep(120);
   }
 
+  if (filesSelector && filesPaths) {
+    const paths = filesPaths.split(';').filter(Boolean);
+    await send('DOM.enable', {}, session);
+    const doc = await send('DOM.getDocument', {}, session);
+    const found = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: filesSelector }, session);
+    const nodeId = found.result ? found.result.nodeId : 0;
+    if (!nodeId) throw new Error('--files 没找到元素: ' + filesSelector);
+    const result = await send('DOM.setFileInputFiles', { nodeId, files: paths }, session);
+    if (result.error) throw new Error('选择文件失败: ' + JSON.stringify(result.error));
+    output.files = paths;
+    await sleep(400);
+  }
+
+  if (wheelExpr) {
+    const plan = await evaluate(wheelExpr);
+    const steps = Array.isArray(plan[0]) ? plan : [plan];
+    output.wheel = [];
+    for (const step of steps) {
+      const x = step[0];
+      const y = step[1];
+      const deltaY = step[2] === undefined ? 100 : step[2];
+      const shift = !!step[3];
+      // 指针必须先真的在那个点上：滚轮事件永远发生在指针位置
+      await mouse('mouseMoved', x, y, 0);
+      const result = await send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x, y, deltaX: 0, deltaY, modifiers: shift ? 8 : 0,
+      }, session);
+      if (result.error) throw new Error('滚轮事件失败: ' + JSON.stringify(result.error));
+      output.wheel.push({ x, y, deltaY, shift });
+      await sleep(110);
+    }
+    await sleep(200);
+  }
+
   if (typeText !== null) {
     const inserted = await send('Input.insertText', { text: typeText }, session);
     if (inserted.error) throw new Error('输入失败: ' + JSON.stringify(inserted.error));
@@ -252,6 +307,22 @@ if (screenshotPath) {
   } else {
     output.screenshotError = JSON.stringify(shot.result || shot.error);
   }
+}
+
+if (downloadEvents.length > 0) {
+  // 有下载就等它落地：不然 Chrome 会在文件写完之前被我们收掉，目录里什么都没有
+  for (let i = 0; i < 40; i += 1) {
+    const done = downloadEvents.some((e) => e.method === 'Browser.downloadProgress' && e.params.state !== 'inProgress');
+    if (done) break;
+    await sleep(100);
+  }
+  output.downloads = downloadEvents.map((e) => ({
+    method: e.method,
+    state: e.params.state,
+    suggestedFilename: e.params.suggestedFilename,
+    totalBytes: e.params.totalBytes,
+    receivedBytes: e.params.receivedBytes,
+  }));
 }
 
 console.log(asJson ? JSON.stringify(output, null, 2) : JSON.stringify(output, null, 2));
