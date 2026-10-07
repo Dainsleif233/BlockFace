@@ -234,10 +234,10 @@ export function addLayer(skinId: string, overrides: Partial<AvatarLayer> = {}): 
     id: createId('layer'),
     skinId,
     name: '',
-    // 官方 Steve 的帽子层是一圈不透明灰（正面 64 个像素里 22 个是灰的，
-    // 额头与两鬓会被整个盖住，占成品 34% 的面积）。贴头像的默认观感要干净，
-    // 所以默认不叠第二层；想要正版渲染效果可以在属性面板打开。
-    overlay: false,
+    // 默认叠上第二层（帽子层）。官方 Steve 这层正面是一圈不透明灰，会把额头两行
+    // 与两鬓盖成灰的（占成品 34% 面积），看着像坏图，但它就是官方原始数据，
+    // 开着才是正版渲染结果；不想要的人在属性面板关掉即可。
+    overlay: true,
     x: state.document.width / 2,
     y: state.document.height / 2,
     size,

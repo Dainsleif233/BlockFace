@@ -11,7 +11,7 @@ const props = withDefaults(
     overlay?: boolean;
     size?: number;
   }>(),
-  { overlay: false, size: 44 },
+  { overlay: true, size: 44 },
 );
 
 const el = ref<HTMLCanvasElement | null>(null);

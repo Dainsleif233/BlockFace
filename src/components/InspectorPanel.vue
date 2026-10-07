@@ -113,7 +113,7 @@ function resetTransform(): void {
           class="bf-tg"
           role="switch"
           :aria-checked="layer.overlay"
-          title="官方 Steve 的帽子层本身就是一层不透明灰，这是 Mojang 的原始数据"
+          title="第二层是官方贴图的一部分：Steve 这层正面是一圈不透明灰，关掉能露出完整正脸"
           @click="patch({ overlay: !layer.overlay })"
         >
           <span class="bf-tg-track" aria-hidden="true"><i class="bf-tg-knob" /></span>
