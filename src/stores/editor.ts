@@ -633,6 +633,10 @@ function composeToCanvas(checkerboard: boolean): HTMLCanvasElement | null {
     notify('error', '皮肤尚未加载完成，无法合成');
     return null;
   }
+  if (items.length < state.layers.length) {
+    const missing = state.layers.length - items.length;
+    notify('warn', `有 ${missing} 个头像的皮肤尚未就绪，已略过未加载项`);
+  }
   const baseImage = getBaseImage(state.baseImageId);
   try {
     composeDocument(canvas, {

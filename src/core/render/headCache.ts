@@ -29,7 +29,12 @@ export class HeadCache {
     const size = Math.max(1, Math.round(pixelSize));
     const key = `${skin.id}|${overlay ? 1 : 0}|${size}|${skin.meta.scale}`;
     const hit = this.entries.get(key);
-    if (hit) return hit.canvas;
+    if (hit) {
+      // LRU 淘汰：命中时将该项移动到 Map 末尾
+      this.entries.delete(key);
+      this.entries.set(key, hit);
+      return hit.canvas;
+    }
 
     const canvas = renderHeadCanvas(skin, { overlay, pixelSize: size });
     this.entries.set(key, { canvas, key });

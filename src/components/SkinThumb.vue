@@ -1,7 +1,7 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { renderHeadCanvas } from '../core/render/head';
+import { headCache } from '../core/render/headCache';
 import { editor, getSkin } from '../stores/editor';
 
 const props = withDefaults(
@@ -31,7 +31,8 @@ function draw(): void {
   ctx.clearRect(0, 0, pixels, pixels);
   const skin = getSkin(props.skinId);
   if (!skin) return;
-  ctx.drawImage(renderHeadCanvas(skin, { overlay: props.overlay, pixelSize: pixels }), 0, 0);
+  const head = headCache.get(skin, props.overlay, pixels);
+  ctx.drawImage(head, 0, 0);
 }
 
 onMounted(draw);

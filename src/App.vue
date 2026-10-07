@@ -48,12 +48,17 @@ function onKey(event: KeyboardEvent): void {
   if (!event.ctrlKey && !event.metaKey) return;
   const target = event.target as HTMLElement | null;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
-  if (event.key.toLowerCase() !== 'z') return;
-  event.preventDefault();
-  if (event.shiftKey) {
+  const key = event.key.toLowerCase();
+  if (key === 'z') {
+    event.preventDefault();
+    if (event.shiftKey) {
+      if (canRedo.value) redo();
+    } else if (canUndo.value) {
+      undo();
+    }
+  } else if (key === 'y' && !event.shiftKey) {
+    event.preventDefault();
     if (canRedo.value) redo();
-  } else if (canUndo.value) {
-    undo();
   }
 }
 

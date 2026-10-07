@@ -21,6 +21,7 @@ import {
   fitView,
   getBaseImage,
   getSkin,
+  removeLayer,
   rotateLayerBy,
   scaleLayerBy,
   selectLayer,
@@ -432,12 +433,7 @@ function onKeyDown(event: KeyboardEvent): void {
 
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault();
-    const id = layer.id;
-    beginChange();
-    const index = editor.layers.findIndex((l) => l.id === id);
-    if (index >= 0) editor.layers.splice(index, 1);
-    editor.selectedId = editor.layers.at(-1)?.id ?? null;
-    endChange();
+    removeLayer(layer.id);
     schedule();
     return;
   }

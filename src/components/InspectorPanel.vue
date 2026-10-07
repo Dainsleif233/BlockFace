@@ -95,13 +95,22 @@ const skinLabel = computed(() => {
   return record ? record.sourceLabel : '皮肤未载入';
 });
 
-const sliders = computed<SliderSpec[]>(() => [
-  { key: 'x', label: 'X', aria: '横向位置', min: 0, max: editor.document.width, step: 1, factor: 1 },
-  { key: 'y', label: 'Y', aria: '纵向位置', min: 0, max: editor.document.height, step: 1, factor: 1 },
-  { key: 'size', label: '大小', aria: '大小', min: MIN_LAYER_SIZE, max: maxLayerSize.value, step: 1, factor: 1 },
-  { key: 'rotation', label: '旋转', aria: '旋转角度', min: -180, max: 180, step: 1, factor: 1 },
-  { key: 'opacity', label: '不透明度', aria: '不透明度', min: 0, max: 100, step: 1, factor: 100 },
-]);
+const sliders = computed<SliderSpec[]>(() => {
+  const cur = layer.value;
+  const margin = cur ? cur.size * 0.25 : 0;
+  const minX = cur ? Math.round(margin - cur.size) : 0;
+  const maxX = cur ? Math.round(editor.document.width + cur.size - margin) : editor.document.width;
+  const minY = cur ? Math.round(margin - cur.size) : 0;
+  const maxY = cur ? Math.round(editor.document.height + cur.size - margin) : editor.document.height;
+
+  return [
+    { key: 'x', label: 'X', aria: '横向位置', min: minX, max: maxX, step: 1, factor: 1 },
+    { key: 'y', label: 'Y', aria: '纵向位置', min: minY, max: maxY, step: 1, factor: 1 },
+    { key: 'size', label: '大小', aria: '大小', min: MIN_LAYER_SIZE, max: maxLayerSize.value, step: 1, factor: 1 },
+    { key: 'rotation', label: '旋转', aria: '旋转角度', min: -180, max: 180, step: 1, factor: 1 },
+    { key: 'opacity', label: '不透明度', aria: '不透明度', min: 0, max: 100, step: 1, factor: 100 },
+  ];
+});
 
 function rawValue(spec: SliderSpec): number {
   const target = layer.value;
