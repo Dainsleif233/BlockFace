@@ -432,8 +432,6 @@ defineExpose({ schedule });
 .stage__foot { flex: none; display: flex; align-items: center; gap: 8px; }
 
 .stage__zoombar { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.stage__zoombar .bf-btn--icon { border-color: var(--bf-stage-major); color: var(--bf-paper); }
-.stage__zoombar .bf-btn--quiet { color: var(--bf-paper); }
 
 .stage__body {
   flex: 1 1 auto;

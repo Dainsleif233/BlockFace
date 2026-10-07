@@ -380,7 +380,7 @@ h1, h2, h3, p { margin: 0; }
   border: 1px solid var(--bf-line);
   color: var(--bf-ink2);
 }
-.bf-x:hover { border-color: var(--bf-red); color: var(--bf-red); }
+.bf-x:hover { border-color: var(--bf-red); color: var(--bf-red-ink); }
 
 /* ============================ 9. 纯 CSS 图标 ============================ */
 .bf-ic { position: relative; display: block; flex: none; color: currentColor; }

@@ -92,6 +92,7 @@ tools/                   自建的验证工具链（见下）
 | `probe-ui.js` | 量页面溢出、字号下限、emoji 数量、canvas 是否真的画了东西，并逐个检查交互控件有没有面积、中心点能不能点到 |
 | `probe-export.js` | 走真实的导出路径，验证 PNG 真的落盘且尺寸正确 |
 | `probe-controls-pre/post.js` | 配 `--drag` / `--click` / `--type` 用真实鼠标与键盘验滑杆拖动、数字框输入与历史粒度 |
+| `probe-contrast.js` | 逐段算出文字/图标/占位符的实际前景与合成背景，按 WCAG 公式算对比度，低于 4.5:1（大字号 3:1）就报出来 |
 | `probe-hat.js` | 把官方皮肤第二层画成 ASCII，量清帽子层到底挡住哪里 |
 | `probe-preset.js` | 存预设并点导出，验证 JSON 真的落盘 |
 | `probe-preset-import.js` | 把上一步下载的文件导入回来，验证自带皮肤、可套用、能渲染 |

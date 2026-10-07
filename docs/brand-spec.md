@@ -69,6 +69,9 @@
 | 说明、标签、状态栏 | 12px / 400 | sans |
 
 **硬下限**：正文 ≥14px（表意性长文本）、控件与标签 ≥12px。**不得出现小于 12px 的文字。**
+**对比度**：文字 ≥4.5:1（大字号 3:1），图标与描边等非文本 ≥3:1。改完界面跑一次
+`node tools/cdp.mjs --url http://localhost:5178/ --pre-file tools/probe-contrast-pre.js --expr-file tools/probe-contrast.js --json`，
+它会把每段文字的前景与逐层合成出来的背景一起算，比肉眼可靠。
 
 ## 5. 间距与尺寸
 
