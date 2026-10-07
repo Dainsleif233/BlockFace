@@ -8,15 +8,17 @@ import {
   editor,
   exportPresets,
   importPresets,
+  MAX_BATCH,
   preloadBuiltins,
   removePreset,
   renamePreset,
   saveCurrentAsPreset,
-  useAccountSkin,
+  splitBatchInput,
+  useAccountSkins,
   useBuiltinSkin,
   useExistingSkin,
-  useSkinFile,
-  useSkinUrl,
+  useSkinFiles,
+  useSkinUrls,
 } from '../stores/editor';
 import SkinThumb from './SkinThumb.vue';
 
@@ -120,22 +122,22 @@ onMounted(() => {
 async function submitAccount(): Promise<void> {
   const value = accountId.value.trim();
   if (!value || busy.value) return;
+  const count = splitBatchInput(value).length;
   accountState.value = 'busy';
-  accountText.value = '查询中…';
-  try {
-    await useAccountSkin(value);
-    accountState.value = 'ok';
-    accountText.value = '已套用 ' + value;
-  } catch (error) {
-    accountState.value = 'fail';
-    accountText.value = error instanceof Error ? error.message : '查询失败';
-  }
+  accountText.value = count > 1 ? `查询 ${count} 个账号…` : '查询中…';
+  const result = await useAccountSkins(value);
+  accountState.value = result.ok > 0 && result.failed.length === 0 ? 'ok' : 'fail';
+  accountText.value = result.failed.length
+    ? `成功 ${result.ok} 个 · 失败 ${result.failed.length} 个`
+    : count > 1
+      ? `已添加 ${result.ok} 个头像`
+      : '已套用 ' + value;
 }
 
 async function submitUrl(): Promise<void> {
   const value = urlInput.value.trim();
   if (!value || busy.value) return;
-  await useSkinUrl(value);
+  await useSkinUrls(value);
   urlInput.value = '';
 }
 
@@ -149,9 +151,9 @@ function pickPresetFile(): void {
 
 async function onSkinFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
+  const files = Array.from(input.files ?? []);
   input.value = '';
-  if (file) await useSkinFile(file);
+  if (files.length) await useSkinFiles(files);
 }
 
 async function onPresetFile(event: Event): Promise<void> {
@@ -163,8 +165,8 @@ async function onPresetFile(event: Event): Promise<void> {
 
 async function onDrop(event: DragEvent): Promise<void> {
   dropActive.value = false;
-  const file = event.dataTransfer?.files?.[0];
-  if (file) await useSkinFile(file);
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  if (files.length) await useSkinFiles(files);
 }
 </script>
 
@@ -195,13 +197,19 @@ async function onDrop(event: DragEvent): Promise<void> {
       </section>
 
       <section class="bf-sblk bf-sblk--gold" title="经 playerdb.co 取回贴图；Mojang 官方接口不返回跨域头，纯前端无法直连">
-        <div class="bf-sblk-t"><h3>正版账号 ID</h3></div>
+        <div
+          class="bf-sblk-t"
+          :title="'一次填多个账号（空格、逗号或换行隔开）会各加一个头像，最多 ' + MAX_BATCH + ' 个'"
+        >
+          <h3>正版账号 ID</h3>
+          <span>多个各加一个</span>
+        </div>
         <form class="bf-row" @submit.prevent="submitAccount">
           <input
             v-model="accountId"
             class="bf-inp"
             type="text"
-            placeholder="例如 Notch"
+            placeholder="Notch，可贴几个账号"
             aria-label="正版账号 ID"
             :disabled="busy"
           />
@@ -218,7 +226,10 @@ async function onDrop(event: DragEvent): Promise<void> {
       </section>
 
       <section class="bf-sblk bf-sblk--cyan">
-        <div class="bf-sblk-t"><h3>上传皮肤</h3></div>
+        <div class="bf-sblk-t" title="按住 Ctrl/Cmd 多选，或一次拖入多张，每张各加一个头像">
+          <h3>上传皮肤</h3>
+          <span>可多选</span>
+        </div>
         <div
           class="bf-drop"
           role="button"
@@ -234,16 +245,26 @@ async function onDrop(event: DragEvent): Promise<void> {
           <span class="bf-drop-t">拖入或点击选择</span>
           <span class="bf-drop-s">64×64 · 64×32 · 128 以上高清</span>
         </div>
-        <input ref="skinInput" class="bf-sr-only" type="file" accept="image/png,image/jpeg,image/webp" @change="onSkinFile" />
+        <input
+          ref="skinInput"
+          class="bf-sr-only"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          multiple
+          @change="onSkinFile"
+        />
       </section>
 
       <section class="bf-sblk bf-sblk--red">
-        <div class="bf-sblk-t"><h3>皮肤 URL</h3></div>
+        <div class="bf-sblk-t" title="一次填多个地址（空格或换行隔开）会各加一个头像">
+          <h3>皮肤 URL</h3>
+          <span>多个各加一个</span>
+        </div>
         <form class="bf-row" @submit.prevent="submitUrl">
           <input
             v-model="urlInput"
             class="bf-inp"
-            type="url"
+            type="text"
             placeholder="粘贴图片直链"
             aria-label="皮肤 URL"
             :disabled="busy"

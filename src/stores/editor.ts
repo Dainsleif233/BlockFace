@@ -522,8 +522,12 @@ export async function useAccountSkin(name: string): Promise<void> {
   }
 }
 
+function isSkinFile(file: File): boolean {
+  return /^image\/(png|jpeg|webp)$/.test(file.type) || /\.(png|jpg|jpeg|webp)$/i.test(file.name);
+}
+
 export async function useSkinFile(file: File): Promise<void> {
-  if (!/^image\/(png|jpeg|webp)$/.test(file.type) && !/\.(png|jpg|jpeg|webp)$/i.test(file.name)) {
+  if (!isSkinFile(file)) {
     notify('error', '请选择 PNG 格式的皮肤贴图');
     return;
   }
@@ -694,6 +698,181 @@ export async function exportPng(): Promise<void> {
 
 export function previewCanvas(scale = 1): HTMLCanvasElement | null {
   return composeToCanvas(scale, false);
+}
+
+/* ------------------------------------------------------------------ *
+ * 批量添加
+ *
+ * 一次贴一排头像是这工具最常见的用法（一个班、一支队伍）。
+ * 口径：填一个 = 老规矩（换掉选中的头像，没选中就新增）；填多个 = 各新增一个 ——
+ * 一次给一列名单时，用户要的显然是"都加上"，不是互相覆盖。
+ * ------------------------------------------------------------------ */
+
+/** 一次批量的上限：再多就不是"贴几个头像"，而是导入了 */
+export const MAX_BATCH = 12;
+
+export interface BatchResult {
+  ok: number;
+  failed: string[];
+}
+
+/** 名单按空格、逗号、分号、换行拆开 —— 从聊天窗口里粘出来就是长这样 */
+export function splitBatchInput(text: string): string[] {
+  return text
+    .split(/[\s,，、;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, MAX_BATCH);
+}
+
+/** 尺寸不合规的贴图在这里就拦掉，别等画的时候才炸 */
+function requireSkin(loaded: LoadedImage): LoadedImage {
+  assertUsableSkin(describeSkin(loaded.width, loaded.height));
+  return loaded;
+}
+
+function shortLabel(text: string): string {
+  return text.length > 24 ? text.slice(0, 24) + '…' : text;
+}
+
+/** 一次贴多个时别都堆在正中间：按方阵摆开，一眼能数清有几个 */
+function gridSlots(count: number): { x: number; y: number; size: number }[] {
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const cellWidth = state.document.width / (cols + 1);
+  const cellHeight = state.document.height / (rows + 1);
+  const size = clampSize(Math.min(cellWidth, cellHeight) * 1.2);
+  return Array.from({ length: count }, (_, index) => ({
+    x: Math.round(cellWidth * ((index % cols) + 1)),
+    y: Math.round(cellHeight * (Math.floor(index / cols) + 1)),
+    size,
+  }));
+}
+
+interface BatchItem {
+  /** 失败时用来指认是谁 */
+  label: string;
+  origin: SkinOrigin;
+  load: () => Promise<{ loaded: LoadedImage; provider: string; label: string }>;
+}
+
+/** 逐个加载，成功的各占一层；整批只收一条历史，撤销一次就整批退回 */
+async function batchAdd(items: BatchItem[], what: string): Promise<BatchResult> {
+  const ready: { loaded: LoadedImage; provider: string; label: string; origin: SkinOrigin }[] = [];
+  const failed: string[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    state.busy = `批量${what} ${index + 1}/${items.length}`;
+    try {
+      ready.push({ ...(await item.load()), origin: item.origin });
+    } catch {
+      failed.push(shortLabel(item.label));
+    }
+  }
+  state.busy = null;
+
+  if (ready.length === 0) {
+    notify('error', `${what}都没成功：${failed.join('、')}`);
+    return { ok: 0, failed };
+  }
+
+  commit();
+  const slots = gridSlots(ready.length);
+  ready.forEach((entry, index) => {
+    const skinId = createId('skin');
+    registerSkin(entry.loaded, entry.origin, entry.label, entry.provider, skinId, false);
+    addLayer(skinId, slots[index]);
+    state.activeSkinId = skinId;
+  });
+  notify(
+    failed.length > 0 ? 'warn' : 'success',
+    failed.length > 0
+      ? `批量添加了 ${ready.length} 个头像，${failed.length} 个失败（${failed.join('、')}）`
+      : `批量添加了 ${ready.length} 个头像`,
+  );
+  return { ok: ready.length, failed };
+}
+
+/** 账号 ID：一个走老路（应用到选中的头像），多个就各新增一个 */
+export async function useAccountSkins(text: string): Promise<BatchResult> {
+  const names = splitBatchInput(text);
+  if (names.length === 0) {
+    notify('error', '请输入正版账号 ID');
+    return { ok: 0, failed: [] };
+  }
+  if (names.length === 1) {
+    const before = state.skins.length;
+    await useAccountSkin(names[0]);
+    return state.skins.length > before ? { ok: 1, failed: [] } : { ok: 0, failed: [names[0]] };
+  }
+  return batchAdd(
+    names.map((name): BatchItem => ({
+      label: name,
+      origin: 'account',
+      load: async () => {
+        const resolution = await resolveAccountSkin(name);
+        const { result, provider } = await loadFirstAvailable(resolution.candidates, loadCandidate);
+        return { loaded: requireSkin(result), provider, label: resolution.displayName };
+      },
+    })),
+    '查询账号',
+  );
+}
+
+/** 皮肤文件：一张走老路，多张各新增一个 */
+export async function useSkinFiles(files: File[]): Promise<BatchResult> {
+  const usable = files.filter((file) => isSkinFile(file));
+  if (usable.length === 0) {
+    notify('error', '请选择 PNG 格式的皮肤贴图');
+    return { ok: 0, failed: [] };
+  }
+  if (usable.length === 1) {
+    const before = state.skins.length;
+    await useSkinFile(usable[0]);
+    return state.skins.length > before ? { ok: 1, failed: [] } : { ok: 0, failed: [usable[0].name] };
+  }
+  return batchAdd(
+    usable.map((file): BatchItem => ({
+      label: file.name,
+      origin: 'upload',
+      load: async () => {
+        const url = URL.createObjectURL(file);
+        try {
+          const loaded = requireSkin(await loadImage(url, { cors: false }));
+          return { loaded, provider: '本地上传', label: file.name.replace(/\.[^.]+$/, '') };
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      },
+    })),
+    '读取皮肤',
+  );
+}
+
+/** 皮肤地址：一条走老路，多条各新增一个 */
+export async function useSkinUrls(text: string): Promise<BatchResult> {
+  const urls = splitBatchInput(text);
+  if (urls.length === 0) {
+    notify('error', '请输入皮肤贴图地址');
+    return { ok: 0, failed: [] };
+  }
+  if (urls.length === 1) {
+    const before = state.skins.length;
+    await useSkinUrl(urls[0]);
+    return state.skins.length > before ? { ok: 1, failed: [] } : { ok: 0, failed: [urls[0]] };
+  }
+  return batchAdd(
+    urls.map((url): BatchItem => ({
+      label: url,
+      origin: 'url',
+      load: async () => {
+        const loaded = requireSkin(await loadImage(url, { proxyTemplate: state.proxyTemplate }));
+        const parsed = new URL(url);
+        return { loaded, provider: parsed.hostname, label: url.split('/').pop()?.slice(0, 24) || parsed.hostname };
+      },
+    })),
+    '下载皮肤',
+  );
 }
 
 /* ------------------------------------------------------------------ *
