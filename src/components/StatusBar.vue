@@ -26,7 +26,6 @@ const skinLabel = computed(() => {
     <span class="st">头像 <b>{{ editor.layers.length }}</b> 个</span>
     <span class="st">皮肤 <b>{{ skinLabel }}</b></span>
     <span class="st">缩放 <b>{{ zoomLabel }}</b></span>
-    <span class="st">导出 <b>{{ editor.document.width * editor.exportScale }} × {{ editor.document.height * editor.exportScale }}</b></span>
     <span class="st-right">
       <span class="beat" aria-hidden="true">
         <i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i />

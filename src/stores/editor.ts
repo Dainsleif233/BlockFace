@@ -98,7 +98,6 @@ interface EditorState {
   view: { zoom: number; autoFit: boolean };
   busy: string | null;
   notice: Notice | null;
-  exportScale: number;
   showGrid: boolean;
   proxyTemplate: string;
   /** 皮肤登记表版本号，异步加载完成后自增，驱动 canvas 组件重绘 */
@@ -121,7 +120,6 @@ const state = reactive<EditorState>({
   view: { zoom: 1, autoFit: true },
   busy: null,
   notice: null,
-  exportScale: 2,
   showGrid: false,
   proxyTemplate: DEFAULT_PROXY_TEMPLATE,
   skinRevision: 0,
@@ -658,7 +656,7 @@ export function setDocumentSize(width: number, height: number): void {
  * 导出
  * ------------------------------------------------------------------ */
 
-function composeToCanvas(scale: number, checkerboard: boolean): HTMLCanvasElement | null {
+function composeToCanvas(checkerboard: boolean): HTMLCanvasElement | null {
   const canvas = document.createElement('canvas');
   const items = state.layers
     .map((layer) => ({ layer, skin: getSkin(layer.skinId) }))
@@ -672,7 +670,6 @@ function composeToCanvas(scale: number, checkerboard: boolean): HTMLCanvasElemen
     composeDocument(canvas, {
       width: state.document.width,
       height: state.document.height,
-      scale,
       base: baseImage ? { image: baseImage, ...state.baseView } : null,
       items,
       checkerboard,
@@ -684,8 +681,9 @@ function composeToCanvas(scale: number, checkerboard: boolean): HTMLCanvasElemen
   return canvas;
 }
 
+/** 导出固定 1 倍：导出尺寸就是画布尺寸，所见即所得 */
 export async function exportPng(): Promise<void> {
-  const canvas = composeToCanvas(state.exportScale, false);
+  const canvas = composeToCanvas(false);
   if (!canvas) return;
   try {
     const blob = await canvasToBlob(canvas);
@@ -694,10 +692,6 @@ export async function exportPng(): Promise<void> {
   } catch (error) {
     notify('error', (error as Error).message);
   }
-}
-
-export function previewCanvas(scale = 1): HTMLCanvasElement | null {
-  return composeToCanvas(scale, false);
 }
 
 /* ------------------------------------------------------------------ *

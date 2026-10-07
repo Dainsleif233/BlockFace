@@ -40,15 +40,6 @@ async function onFile(event: Event): Promise<void> {
       </button>
       <input ref="fileInput" class="bf-sr-only" type="file" accept="image/*" @change="onFile" />
 
-      <label class="scale">
-        <span class="scale__label">倍率</span>
-        <select v-model.number="editor.exportScale" class="scale__select" aria-label="导出倍率">
-          <option :value="1">1×</option>
-          <option :value="2">2×</option>
-          <option :value="3">3×</option>
-        </select>
-      </label>
-
       <button class="bf-btn bf-btn--go" type="button" :disabled="busy" @click="exportPng">
         <i class="bf-ic bf-ic--out" aria-hidden="true"><b /><b /></i>导出 PNG
       </button>
@@ -102,17 +93,6 @@ async function onFile(event: Event): Promise<void> {
 .topbar__sep { width: 1px; height: 26px; background: var(--bf-line); flex: none; }
 
 .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-
-.scale { display: flex; align-items: center; gap: 6px; }
-.scale__label { font-size: var(--bf-font-size-sm); color: var(--bf-ink2); }
-.scale__select {
-  height: 34px;
-  padding: 0 6px;
-  border: 1px solid var(--bf-ink);
-  background: var(--bf-white);
-  color: var(--bf-ink);
-  font: 600 var(--bf-font-size-ui) / 1 var(--bf-mono);
-}
 
 .busy { font-size: var(--bf-font-size-sm); color: var(--bf-ink2); }
 </style>
