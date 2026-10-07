@@ -1,7 +1,7 @@
 /**
- * 真实输入探针 · 备好场景：1280×800 底图 + 一个 200px 头像，并算好要用的屏幕坐标
+ * 真实输入探针 · 备好场景：1280×800 的底图 + 一个 200px 头像，并量好要用的屏幕坐标。
+ * 滚轮探针与平移探针共用这一份前置。
  */
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const store = window.__blockface;
 const { editor } = store;
@@ -34,6 +34,7 @@ window.__probe = {
   avatar: at(640, 400),
   empty: at(150, 700),
   sizeBefore: editor.layers[0].size,
-  baseBefore: { x: editor.baseView.x, y: editor.baseView.y, scale: editor.baseView.scale },
+  layerPos: { x: editor.layers[0].x, y: editor.layers[0].y },
+  effectiveScale: scale,
 };
-return { sizeBefore: window.__probe.sizeBefore, avatar: window.__probe.avatar, empty: window.__probe.empty };
+return { sizeBefore: window.__probe.sizeBefore, avatar: window.__probe.avatar, empty: window.__probe.empty, scale: Number(scale.toFixed(4)) };

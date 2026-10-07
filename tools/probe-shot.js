@@ -53,5 +53,4 @@ return {
   presets: editor.presets.length,
   document: editor.document.width + '×' + editor.document.height,
   tip: tip ? tip.textContent.trim() : null,
-  baseView: JSON.stringify(editor.baseView),
 };
