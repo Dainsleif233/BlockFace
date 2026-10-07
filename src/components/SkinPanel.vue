@@ -10,7 +10,7 @@ import {
   importPresets,
   preloadBuiltins,
   removePreset,
-  savePresetFromSelection,
+  saveCurrentAsPreset,
   useAccountSkin,
   useBuiltinSkin,
   useExistingSkin,
@@ -227,14 +227,16 @@ async function onDrop(event: DragEvent): Promise<void> {
           </span>
         </div>
 
+        <p class="bf-note">预设存的是<strong>整张图</strong>：底图、画布尺寸和上面的每个头像一起打包。套用会把当前画布整体换掉，撤销一次就能退回来。</p>
+
         <button
           class="bf-btn bf-btn--sm preset__save"
           type="button"
-          :disabled="!editor.selectedId"
-          :title="editor.selectedId ? '把选中头像的皮肤与参数存下来' : '先在画布上选中一个头像'"
-          @click="savePresetFromSelection"
+          :disabled="!editor.layers.length && !editor.baseImage"
+          :title="editor.layers.length || editor.baseImage ? '把当前整张图（底图 + 全部头像）存成预设' : '画布还是空的，先载入底图或放个头像'"
+          @click="saveCurrentAsPreset"
         >
-          保存当前头像
+          保存整张为预设
         </button>
         <input ref="presetInput" class="bf-sr-only" type="file" accept="application/json,.json" @change="onPresetFile" />
 
@@ -242,15 +244,20 @@ async function onDrop(event: DragEvent): Promise<void> {
           <li v-for="preset in editor.presets" :key="preset.id">
             <div class="bf-lay">
               <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR.preset }" aria-hidden="true" />
-              <button type="button" class="row__pick" :title="'套用「' + preset.name + '」'" @click="applyPreset(preset.id)">
+              <button
+                type="button"
+                class="row__pick"
+                :title="'套用「' + preset.name + '」：' + preset.width + '×' + preset.height + '，' + preset.layers.length + ' 个头像（会替换当前画布，可撤销）'"
+                @click="applyPreset(preset.id)"
+              >
                 <span
                   class="bf-face preset-face"
-                  :class="{ 'preset-face--empty': !preset.skin }"
-                  :style="preset.skin ? { backgroundImage: 'url(' + preset.skin.dataUrl + ')' } : undefined"
+                  :class="{ 'preset-face--empty': !(preset.base && preset.base.kind === 'data') }"
+                  :style="preset.base && preset.base.kind === 'data' ? { backgroundImage: 'url(' + preset.base.value + ')' } : undefined"
                 />
                 <span class="bf-lay-n">{{ preset.name }}</span>
               </button>
-              <span class="bf-lay-m">{{ preset.size }}px</span>
+              <span class="bf-lay-m">{{ preset.layers.length }} 头像</span>
               <button class="bf-x" type="button" title="删除预设" aria-label="删除预设" @click="removePreset(preset.id)">
                 <i class="bf-ic bf-ic--x" aria-hidden="true" />
               </button>

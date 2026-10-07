@@ -1,164 +1,210 @@
 /*!
  * BlockFace — 给图片贴 Minecraft 头像
  * Copyright 2026 Dainsleif
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0
  */
 
 import { describe, expect, it } from 'vitest';
 import {
+  countEmbeddedImages,
   createPresetFile,
-  isSafeSkinDataUrl,
+  isSafeImageDataUrl,
+  isSafeImageUrl,
+  MAX_PRESETS,
+  MAX_TEMPLATE_LAYERS,
   normalizePreset,
+  normalizePresetLayer,
   parsePresetFile,
-  PresetParseError,
   PRESET_FORMAT,
   PRESET_VERSION,
+  presetByteSize,
+  PresetParseError,
   serializePresetFile,
   suggestPresetFilename,
   type Preset,
 } from './preset';
-import { MAX_LAYER_SIZE, MIN_LAYER_SIZE } from './types';
 
-const PNG = 'data:image/png;base64,iVBORw0KGgo=';
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA==';
 
-function makePreset(overrides: Partial<Preset> = {}): Preset {
+function layer(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { name: '头像 1', x: 100, y: 200, size: 256, rotation: 0, opacity: 1, overlay: true, flipH: false, visible: true, skin: { dataUrl: PNG, width: 64, height: 64 }, ...overrides };
+}
+
+function template(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'p1',
-    name: '我的 Steve',
-    size: 256,
-    rotation: 0,
-    opacity: 1,
-    overlay: true,
-    flipH: false,
-    skin: { dataUrl: PNG, width: 64, height: 64 },
+    name: '我的一天',
     createdAt: 1_700_000_000_000,
+    width: 1280,
+    height: 800,
+    base: { kind: 'data', value: JPEG, width: 1280, height: 800 },
+    layers: [layer()],
     ...overrides,
   };
 }
 
-describe('isSafeSkinDataUrl', () => {
-  it('只放行白名单图片 data URI', () => {
-    expect(isSafeSkinDataUrl(PNG)).toBe(true);
-    expect(isSafeSkinDataUrl('data:image/webp;base64,AAAA')).toBe(true);
-    expect(isSafeSkinDataUrl('data:text/html;base64,PHNjcmlwdD4=')).toBe(false);
-    expect(isSafeSkinDataUrl('javascript:alert(1)')).toBe(false);
-    expect(isSafeSkinDataUrl('https://example.com/skin.png')).toBe(false);
-    expect(isSafeSkinDataUrl(123)).toBe(false);
+describe('图片地址白名单', () => {
+  it('接受 png / jpeg / webp 的 base64 data URI', () => {
+    expect(isSafeImageDataUrl(PNG)).toBe(true);
+    expect(isSafeImageDataUrl(JPEG)).toBe(true);
+    expect(isSafeImageDataUrl('data:image/webp;base64,UklGRg==')).toBe(true);
   });
 
-  it('超长 data URI 直接拒绝，避免预设文件失控', () => {
-    expect(isSafeSkinDataUrl('data:image/png;base64,' + 'A'.repeat(1_600_000))).toBe(false);
+  it('拒绝脚本、外链、非 base64 与超长内容', () => {
+    expect(isSafeImageDataUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeImageDataUrl('http://example.com/a.png')).toBe(false);
+    expect(isSafeImageDataUrl('data:image/png,abc')).toBe(false);
+    expect(isSafeImageDataUrl('data:image/svg+xml;base64,PHN2Zz4=')).toBe(false);
+    expect(isSafeImageDataUrl(PNG, 10)).toBe(false);
+    expect(isSafeImageDataUrl(null)).toBe(false);
+  });
+
+  it('底图链接只收 https', () => {
+    expect(isSafeImageUrl('https://example.com/a.jpg')).toBe(true);
+    expect(isSafeImageUrl('http://example.com/a.jpg')).toBe(false);
+    expect(isSafeImageUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeImageUrl('https://example.com/' + 'a'.repeat(3000))).toBe(false);
   });
 });
 
-describe('normalizePreset', () => {
-  it('把越界数值夹回合法区间', () => {
-    const preset = normalizePreset({ name: 'x', size: 999999, opacity: 8, rotation: 540 });
-    expect(preset?.size).toBe(MAX_LAYER_SIZE);
-    expect(preset?.opacity).toBe(1);
-    expect(preset?.rotation).toBe(180);
+describe('图层归一化', () => {
+  it('把越界数值夹回合法范围', () => {
+    const result = normalizePresetLayer(layer({ size: 99999, rotation: 900, opacity: 3, x: -100, y: 1e9 }), 0, 1280, 800);
+    expect(result).not.toBeNull();
+    expect(result?.size).toBe(4096);
+    expect(result?.rotation).toBe(180);
+    expect(result?.opacity).toBe(1);
+    expect(result?.x).toBe(-100);
+    expect(result?.y).toBe(3200);
   });
 
-  it('最小尺寸同样被夹住', () => {
-    expect(normalizePreset({ size: 1 })?.size).toBe(MIN_LAYER_SIZE);
+  it('overlay / flipH / visible 各自有默认值', () => {
+    const result = normalizePresetLayer({}, 0);
+    expect(result?.overlay).toBe(true);
+    expect(result?.flipH).toBe(false);
+    expect(result?.visible).toBe(true);
+    expect(result?.opacity).toBe(1);
+    expect(result?.name).toBe('头像 1');
   });
 
-  it('缺 skin 时保留变换参数，skin 为 null', () => {
-    const preset = normalizePreset({ name: '纯参数', size: 128 });
-    expect(preset?.skin).toBeNull();
-    expect(preset?.size).toBe(128);
+  it('非对象、皮肤不合法的记录也能收拾出一条图层', () => {
+    expect(normalizePresetLayer('nope')).toBeNull();
+    const result = normalizePresetLayer(layer({ skin: { dataUrl: 'javascript:alert(1)' } }), 2);
+    expect(result?.skin).toBeNull();
+    expect(result?.name).toBe('头像 1');
   });
 
-  it('不安全的 data URI 被丢掉，但预设本身仍然可用', () => {
-    const preset = normalizePreset({ name: '坏皮肤', skin: { dataUrl: 'javascript:alert(1)' } });
-    expect(preset).not.toBeNull();
-    expect(preset?.skin).toBeNull();
+  it('皮肤尺寸被夹进合法区间', () => {
+    const result = normalizePresetLayer(layer({ skin: { dataUrl: PNG, width: 0, height: 99999 } }), 0);
+    expect(result?.skin?.width).toBe(8);
+    expect(result?.skin?.height).toBe(8192);
+  });
+});
+
+describe('模板归一化', () => {
+  it('保留底图、尺寸与全部图层', () => {
+    const result = normalizePreset(template(), 0);
+    expect(result?.name).toBe('我的一天');
+    expect(result?.width).toBe(1280);
+    expect(result?.height).toBe(800);
+    expect(result?.base).toEqual({ kind: 'data', value: JPEG, width: 1280, height: 800 });
+    expect(result?.layers).toHaveLength(1);
+    expect(result?.layers[0].skin?.dataUrl).toBe(PNG);
   });
 
-  it('非对象输入返回 null', () => {
-    expect(normalizePreset(null)).toBeNull();
+  it('底图链接型模板只留链接', () => {
+    const result = normalizePreset(template({ base: { kind: 'url', value: 'https://example.com/a.jpg', width: 640, height: 480 } }), 0);
+    expect(result?.base).toEqual({ kind: 'url', value: 'https://example.com/a.jpg', width: 640, height: 480 });
+  });
+
+  it('危险底图被丢掉，但模板本身还能用', () => {
+    const result = normalizePreset(template({ base: { kind: 'data', value: 'javascript:alert(1)', width: 10, height: 10 } }), 0);
+    expect(result?.base).toBeNull();
+    expect(result?.layers).toHaveLength(1);
+  });
+
+  it('既没底图也没图层的记录直接丢掉', () => {
+    expect(normalizePreset(template({ base: null, layers: [] }), 0)).toBeNull();
     expect(normalizePreset('nope')).toBeNull();
-    expect(normalizePreset([])).toBeNull();
+    expect(normalizePreset(null)).toBeNull();
   });
 
-  it('没有名字时补一个可读的默认名', () => {
-    expect(normalizePreset({}, 2)?.name).toBe('预设 3');
+  it('图层数量有上限', () => {
+    const many = Array.from({ length: MAX_TEMPLATE_LAYERS + 20 }, () => layer());
+    expect(normalizePreset(template({ layers: many }), 0)?.layers).toHaveLength(MAX_TEMPLATE_LAYERS);
   });
 
-  it('overlay 默认开；flipH 默认关', () => {
-    const preset = normalizePreset({});
-    expect(preset?.overlay).toBe(true);
-    expect(preset?.flipH).toBe(false);
-    expect(normalizePreset({ overlay: false, flipH: true })?.overlay).toBe(false);
-    expect(normalizePreset({ overlay: false, flipH: true })?.flipH).toBe(true);
-  });
-});
-
-describe('parsePresetFile', () => {
-  it('读得回自己写出去的文件', () => {
-    const text = serializePresetFile([makePreset()]);
-    const parsed = parsePresetFile(text);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].name).toBe('我的 Steve');
-    expect(parsed[0].skin?.dataUrl).toBe(PNG);
-  });
-
-  it('也接受裸数组', () => {
-    expect(parsePresetFile(JSON.stringify([{ name: 'a' }]))).toHaveLength(1);
-  });
-
-  it('非 JSON 抛错', () => {
-    expect(() => parsePresetFile('not json')).toThrow(PresetParseError);
-  });
-
-  it('别的产品的 JSON 抛错', () => {
-    expect(() => parsePresetFile(JSON.stringify({ format: 'something-else', presets: [] }))).toThrow(/BlockFace/);
-  });
-
-  it('未来版本抛错', () => {
-    const text = JSON.stringify({ format: PRESET_FORMAT, version: PRESET_VERSION + 1, presets: [{ name: 'a' }] });
-    expect(() => parsePresetFile(text)).toThrow(/版本/);
-  });
-
-  it('没有 presets 列表抛错', () => {
-    expect(() => parsePresetFile(JSON.stringify({ format: PRESET_FORMAT }))).toThrow(/presets/);
-  });
-
-  it('列表里全是垃圾时抛错，而不是返回空', () => {
-    expect(() => parsePresetFile(JSON.stringify({ presets: [1, 2, null] }))).toThrow(PresetParseError);
-  });
-
-  it('跳过垃圾条目，保留可用条目', () => {
-    const parsed = parsePresetFile(JSON.stringify({ presets: [null, { name: 'ok' }, 'x'] }));
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].name).toBe('ok');
+  it('尺寸越界会被夹住，名称与 id 有兜底', () => {
+    const result = normalizePreset({ layers: [layer()], width: 1, height: 1e9, name: '   ', id: '' }, 3);
+    expect(result?.width).toBe(16);
+    expect(result?.height).toBe(8192);
+    expect(result?.name).toBe('模板 4');
+    expect(result?.id).toBe('preset-3');
   });
 });
 
-describe('createPresetFile', () => {
-  it('带上格式标记与版本，便于以后迁移', () => {
-    const file = createPresetFile([makePreset()], new Date('2026-10-07T12:00:00Z'));
+describe('预设文件', () => {
+  const presets: Preset[] = [normalizePreset(template(), 0) as Preset];
+
+  it('导出结构与版本号正确', () => {
+    const file = createPresetFile(presets, new Date('2026-10-07T00:00:00Z'));
     expect(file.format).toBe(PRESET_FORMAT);
     expect(file.version).toBe(PRESET_VERSION);
-    expect(file.exportedAt).toBe('2026-10-07T12:00:00.000Z');
+    expect(file.exportedAt).toBe('2026-10-07T00:00:00.000Z');
+    expect(file.presets[0].layers[0].skin?.dataUrl).toBe(PNG);
   });
 
-  it('导出的是副本，改动不会回写原对象', () => {
-    const source = makePreset();
-    const file = createPresetFile([source]);
-    file.presets[0].name = '改过了';
-    file.presets[0].skin!.width = 999;
-    expect(source.name).toBe('我的 Steve');
-    expect(source.skin?.width).toBe(64);
+  it('序列化再解析能原样回来（自包含）', () => {
+    const parsed = parsePresetFile(serializePresetFile(presets));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].base?.value).toBe(JPEG);
+    expect(parsed[0].layers[0].size).toBe(256);
+    expect(parsed[0].width).toBe(1280);
+  });
+
+  it('导出的副本不共享引用', () => {
+    const file = createPresetFile(presets);
+    file.presets[0].layers[0].size = 999;
+    file.presets[0].base!.value = 'tampered';
+    expect(presets[0].layers[0].size).toBe(256);
+    expect(presets[0].base?.value).toBe(JPEG);
+  });
+
+  it('纯数组文件也认', () => {
+    expect(parsePresetFile(JSON.stringify([template()]))).toHaveLength(1);
+  });
+
+  it('坏文件给出面向用户的错误', () => {
+    expect(() => parsePresetFile('{oops')).toThrow(PresetParseError);
+    expect(() => parsePresetFile('{oops')).toThrow('不是合法的 JSON 文件');
+    expect(() => parsePresetFile(JSON.stringify({ format: 'other', presets: [] }))).toThrow('这不是 BlockFace 预设文件');
+    expect(() => parsePresetFile(JSON.stringify({ version: 99, presets: [] }))).toThrow('比当前支持的');
+    expect(() => parsePresetFile(JSON.stringify({ version: 2 }))).toThrow('文件里没有 presets 列表');
+    expect(() => parsePresetFile(JSON.stringify({ presets: [{}] }))).toThrow('没解析出任何可用预设');
+  });
+
+  it('解析结果也有数量上限', () => {
+    const many = Array.from({ length: MAX_PRESETS + 5 }, (_, i) => template({ id: 'p' + i }));
+    expect(parsePresetFile(JSON.stringify(many))).toHaveLength(MAX_PRESETS);
   });
 });
 
-describe('suggestPresetFilename', () => {
-  it('按日期命名，扩展名是 json', () => {
-    expect(suggestPresetFilename(new Date('2026-10-07T12:00:00Z'))).toBe('blockface-presets-20261007.json');
+describe('体积与统计', () => {
+  it('能算出序列化体积', () => {
+    const preset = normalizePreset(template(), 0) as Preset;
+    expect(presetByteSize(preset)).toBeGreaterThan(PNG.length);
+    expect(presetByteSize(preset)).toBe(JSON.stringify(preset).length);
+  });
+
+  it('统计内嵌位图数量：底图 + 有皮肤的图层', () => {
+    const preset = normalizePreset(template({ layers: [layer(), layer({ skin: null })] }), 0) as Preset;
+    expect(countEmbeddedImages(preset)).toBe(2);
+    const urlBase = normalizePreset(template({ base: { kind: 'url', value: 'https://e.com/a.png' } }), 0) as Preset;
+    expect(countEmbeddedImages(urlBase)).toBe(1);
+  });
+
+  it('导出文件名带日期', () => {
+    expect(suggestPresetFilename(new Date('2026-10-07T10:00:00Z'))).toBe('blockface-templates-20261007.json');
   });
 });

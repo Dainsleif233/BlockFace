@@ -6,13 +6,19 @@
 
 import { computed, reactive, ref } from 'vue';
 import {
-  isSafeSkinDataUrl,
+  countEmbeddedImages,
+  isSafeImageDataUrl,
+  MAX_BASE_DATA_URL,
   MAX_PRESETS,
+  MAX_TEMPLATE_BYTES,
   parsePresetFile,
+  presetByteSize,
   PresetParseError,
   serializePresetFile,
   suggestPresetFilename,
   type Preset,
+  type PresetBase,
+  type PresetLayer,
   type PresetSkin,
 } from '../core/model/preset';
 import { clampLayerToDocument } from '../core/model/transform';
@@ -37,6 +43,11 @@ import { assertUsableSkin, describeSkin, type SkinOrigin, type SkinTexture } fro
 
 const baseImages = new Map<string, HTMLImageElement>();
 const skins = new Map<string, SkinTexture>();
+/**
+ * 底图的原始来源（data URI 或 https 链接）。data URI 可能好几 MB，
+ * 放进响应式 state 会被深度代理，所以跟图片元素一样只在登记表里留一份。
+ */
+const baseSources = new Map<string, PresetBase>();
 
 export function getBaseImage(id: string | null): HTMLImageElement | null {
   return id ? baseImages.get(id) ?? null : null;
@@ -525,6 +536,16 @@ export async function useSkinUrl(rawUrl: string): Promise<void> {
  * 底图与文档
  * ------------------------------------------------------------------ */
 
+/** File → data URI；模板要自包含地保存底图，所以载入时顺手留一份 */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export async function setBaseImage(file: File): Promise<void> {
   state.busy = '读取图片';
   try {
@@ -541,6 +562,17 @@ export async function setBaseImage(file: File): Promise<void> {
         tainted: loaded.tainted,
       };
       baseMeta.set(id, meta);
+      // 存模板时要能原样还原底图：原始字节直接留成 data URI，不重新编码（重编码会把 JPEG 撑大）
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        if (isSafeImageDataUrl(dataUrl, MAX_BASE_DATA_URL)) {
+          baseSources.set(id, { kind: 'data', value: dataUrl, width: loaded.width, height: loaded.height });
+        } else {
+          baseSources.delete(id);
+        }
+      } catch {
+        baseSources.delete(id);
+      }
       commit();
       state.baseImageId = id;
       state.baseImage = meta;
@@ -564,6 +596,7 @@ export async function setBaseImage(file: File): Promise<void> {
 
 export function clearBaseImage(): void {
   commit();
+  if (state.baseImageId) baseSources.delete(state.baseImageId);
   state.baseImageId = null;
   state.baseImage = null;
   state.document = { ...DEFAULT_DOCUMENT };
@@ -621,13 +654,15 @@ export function previewCanvas(scale = 1): HTMLCanvasElement | null {
 }
 
 /* ------------------------------------------------------------------ *
- * 头像预设
+ * 预设（整张图片模板）
  *
- * 预设 = 一张内嵌皮肤的位图 + 一组渲染参数，存在 localStorage 里，
- * 也可以导出成 JSON 文件带走。皮肤以 data URI 内嵌，所以预设文件是自包含的。
+ * 预设 = 底图 + 画布尺寸 + 全部头像图层，每个图层自带皮肤位图。
+ * 存的是"这张图是怎么拼出来的"，所以套用一次就能原样回到当时的样子。
+ * 位图全部以 data URI 内嵌：文件自包含、换机器能用，代价是体积大，
+ * 因此写入 localStorage 前会按体积裁剪，并在放不下时明确告诉用户导出成文件。
  * ------------------------------------------------------------------ */
 
-const PRESET_STORAGE_KEY = 'blockface.presets.v1';
+const PRESET_STORAGE_KEY = 'blockface.presets.v2';
 
 function storage(): Storage | null {
   try {
@@ -641,11 +676,22 @@ function storage(): Storage | null {
 function persistPresets(): void {
   const store = storage();
   if (!store) return;
-  try {
-    store.setItem(PRESET_STORAGE_KEY, JSON.stringify(state.presets));
-  } catch {
-    notify('warn', '预设写入本地存储失败（可能是存储空间已满）');
+  // localStorage 通常只有 5MB，而模板自带底图，很容易顶到上限。
+  // 策略是保住最新的几个：写不进去就从最旧的开始丢，而不是整个失败。
+  let keep = state.presets.length;
+  for (; keep >= 0; keep -= 1) {
+    const subset = state.presets.slice(0, keep);
+    try {
+      store.setItem(PRESET_STORAGE_KEY, JSON.stringify(subset));
+      if (keep < state.presets.length) {
+        notify('warn', `本地存储放不下全部预设，只有最新的 ${keep} 个能在刷新后保留；建议导出成文件`);
+      }
+      return;
+    } catch {
+      /* 换少一点再试 */
+    }
   }
+  notify('warn', '预设写入本地存储失败（可能是存储空间已满），建议导出成文件');
 }
 
 /** 从 localStorage 恢复预设；坏数据直接丢弃，不影响启动 */
@@ -688,84 +734,158 @@ function skinToDataUrl(skin: SkinTexture): string | null {
   }
 }
 
-/** 把当前选中的头像存成预设 */
-export function savePresetFromSelection(): void {
-  const layer = selectedLayer.value;
-  if (!layer) {
-    notify('warn', '先在画布上选中一个头像');
+/** 把当前整张画布（底图 + 全部头像）存成预设 */
+export function saveCurrentAsPreset(): void {
+  if (state.presets.length >= MAX_PRESETS) {
+    notify('warn', `预设最多 ${MAX_PRESETS} 个，先删掉几个再存`);
     return;
   }
-  if (state.presets.length >= MAX_PRESETS) {
-    notify('warn', `预设最多 ${MAX_PRESETS} 个`);
+  if (state.layers.length === 0 && !state.baseImage) {
+    notify('warn', '画布还是空的：先载入底图或放一个头像');
     return;
   }
 
-  const skin = getSkin(layer.skinId);
-  const dataUrl = skin ? skinToDataUrl(skin) : null;
-  const embedded: PresetSkin | null =
-    dataUrl && skin && isSafeSkinDataUrl(dataUrl)
-      ? { dataUrl, width: skin.meta.width, height: skin.meta.height }
-      : null;
+  const layers: PresetLayer[] = [];
+  let missingSkin = 0;
+  for (const layer of state.layers) {
+    const skin = getSkin(layer.skinId);
+    const dataUrl = skin ? skinToDataUrl(skin) : null;
+    const embedded: PresetSkin | null =
+      dataUrl && skin && isSafeImageDataUrl(dataUrl)
+        ? { dataUrl, width: skin.meta.width, height: skin.meta.height }
+        : null;
+    if (!embedded) missingSkin += 1;
+    layers.push({
+      name: layer.name,
+      x: layer.x,
+      y: layer.y,
+      size: layer.size,
+      rotation: layer.rotation,
+      opacity: layer.opacity,
+      overlay: layer.overlay,
+      flipH: layer.flipH,
+      visible: layer.visible,
+      skin: embedded,
+    });
+  }
 
   const preset: Preset = {
     id: createId('preset'),
-    name: uniquePresetName(layer.name),
-    size: layer.size,
-    rotation: layer.rotation,
-    opacity: layer.opacity,
-    overlay: layer.overlay,
-    flipH: layer.flipH,
-    skin: embedded,
+    name: uniquePresetName(state.baseImage ? state.baseImage.name : '模板'),
     createdAt: Date.now(),
+    width: state.document.width,
+    height: state.document.height,
+    base: state.baseImageId ? baseSources.get(state.baseImageId) ?? null : null,
+    layers,
   };
+
+  const bytes = presetByteSize(preset);
   state.presets.unshift(preset);
+
+  if (bytes > MAX_TEMPLATE_BYTES) {
+    notify(
+      'warn',
+      `已存为预设「${preset.name}」，但它有 ${(bytes / 1048576).toFixed(1)}MB，太大没法留在浏览器里，请导出成文件`,
+    );
+    return;
+  }
   persistPresets();
+  const pictures = countEmbeddedImages(preset);
   notify(
-    embedded ? 'success' : 'warn',
-    embedded
-      ? `已存为预设「${preset.name}」`
-      : `已存为预设「${preset.name}」，但皮肤太大没能一起存进去`,
+    missingSkin ? 'warn' : 'success',
+    missingSkin
+      ? `已存为预设「${preset.name}」，但有 ${missingSkin} 个头像的皮肤没能一起存进去`
+      : `已把整张图存为预设「${preset.name}」（底图 + ${layers.length} 个头像，内嵌 ${pictures} 张位图）`,
   );
 }
 
-/** 套用预设：内嵌皮肤会登记成一张新皮肤，然后新建一个图层 */
+/**
+ * 套用预设：整张图还原 —— 画布尺寸、底图、全部头像图层。
+ * 是一次性替换而不是叠加，所以撤销一次就能退回套用前的整张图。
+ */
 export async function applyPreset(id: string): Promise<void> {
   const preset = state.presets.find((p) => p.id === id);
   if (!preset) return;
 
-  let skinId: string | null = state.activeSkinId;
-  if (preset.skin) {
-    state.busy = `载入预设 ${preset.name}`;
-    try {
-      const loaded = await loadImage(preset.skin.dataUrl, { cors: false });
-      const meta = describeSkin(loaded.width, loaded.height);
-      if (meta.valid) {
-        skinId = createId('skin');
-        registerSkin(loaded, 'preset', preset.name, '预设', skinId);
-      } else {
-        notify('warn', '预设里的皮肤尺寸不合法，只套用了参数');
-      }
-    } catch {
-      notify('warn', '预设里的皮肤解码失败，只套用了参数');
-    } finally {
-      state.busy = null;
+  state.busy = `载入预设 ${preset.name}`;
+  try {
+    // 要用的位图先全部解出来：中途失败就保持原样，不把画布搅成半成品
+    let loadedBase: LoadedImage | null = null;
+    if (preset.base) {
+      loadedBase = await loadImage(preset.base.value, { cors: preset.base.kind === 'url' });
     }
-  }
+    const ready: { layer: PresetLayer; loaded: LoadedImage }[] = [];
+    for (const item of preset.layers) {
+      if (!item.skin) continue;
+      const loaded = await loadImage(item.skin.dataUrl, { cors: false });
+      if (!describeSkin(loaded.width, loaded.height).valid) continue;
+      ready.push({ layer: item, loaded });
+    }
 
-  if (!skinId || !skins.has(skinId)) {
-    notify('warn', '这个预设没有可用的皮肤');
-    return;
-  }
+    commit();
 
-  commit();
-  addLayer(skinId, {
-    size: clampSize(preset.size),
-    rotation: preset.rotation,
-    opacity: preset.opacity,
-    overlay: preset.overlay,
-    flipH: preset.flipH,
-  });
-  notify('success', `已套用预设「${preset.name}」`);
+    if (preset.base && loadedBase) {
+      const baseId = createId('base');
+      baseImages.set(baseId, loadedBase.element);
+      const meta: BaseImageMeta = {
+        id: baseId,
+        name: preset.name,
+        width: loadedBase.width,
+        height: loadedBase.height,
+        tainted: loadedBase.tainted,
+      };
+      baseMeta.set(baseId, meta);
+      baseSources.set(baseId, { ...preset.base, width: loadedBase.width, height: loadedBase.height });
+      state.baseImageId = baseId;
+      state.baseImage = meta;
+    } else {
+      state.baseImageId = null;
+      state.baseImage = null;
+    }
+
+    state.document = { width: preset.width, height: preset.height };
+    state.layers.length = 0;
+    for (const item of ready) {
+      const skinId = createId('skin');
+      registerSkin(item.loaded, 'preset', preset.name, '预设', skinId);
+      const size = clampSize(item.layer.size);
+      const placed = clampLayerToDocument(
+        { x: item.layer.x, y: item.layer.y, size },
+        state.document.width,
+        state.document.height,
+      );
+      state.layers.push({
+        id: createId('layer'),
+        skinId,
+        name: item.layer.name,
+        overlay: item.layer.overlay,
+        x: placed.x,
+        y: placed.y,
+        size,
+        rotation: item.layer.rotation,
+        opacity: item.layer.opacity,
+        flipH: item.layer.flipH,
+        visible: item.layer.visible,
+      });
+    }
+    const top = state.layers.at(-1) ?? null;
+    state.selectedId = top?.id ?? null;
+    if (top) state.activeSkinId = top.skinId;
+    state.view.autoFit = true;
+
+    const skipped = preset.layers.length - ready.length;
+    const parts = [
+      preset.base ? '底图' : '空白画布',
+      `${state.document.width}×${state.document.height}`,
+      `${ready.length} 个头像`,
+    ];
+    if (skipped > 0) parts.push(`${skipped} 个头像的皮肤缺失`);
+    notify(skipped > 0 ? 'warn' : 'success', `已套用预设「${preset.name}」：${parts.join(' · ')}`);
+  } catch (error) {
+    notify('error', `套用预设失败：${(error as Error).message}`);
+  } finally {
+    state.busy = null;
+  }
 }
 
 export function removePreset(id: string): void {

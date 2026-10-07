@@ -312,51 +312,119 @@ try {
   }
 }
 
-// ============ 8b. 头像预设 ============
+// ============ 8b. 预设 = 整张图片模板 ============
 const { serializePresetFile, parsePresetFile } = await import('/src/core/model/preset.ts');
-store.selectLayer(editor.layers[0].id);
-await sleep(200);
+
+// 从干净画布开始，后面每个数字都能硬写
+store.clearBaseImage();
+for (const item of [...editor.layers]) store.removeLayer(item.id);
+await sleep(300);
+
+// 造一张真底图并走真实的上传路径（含底图 data URI 的留存）
+const baseCanvas = document.createElement('canvas');
+baseCanvas.width = 320;
+baseCanvas.height = 200;
+const baseCtx = baseCanvas.getContext('2d');
+baseCtx.fillStyle = '#3b6ea5';
+baseCtx.fillRect(0, 0, 320, 200);
+baseCtx.fillStyle = '#d9a441';
+baseCtx.fillRect(0, 0, 40, 40);
+const baseBlob = await new Promise((resolve) => baseCanvas.toBlob(resolve, 'image/png'));
+await store.setBaseImage(new File([baseBlob], '我的底图.png', { type: 'image/png' }));
+await sleep(700);
+check('载入底图后画布尺寸跟着变', editor.document.width === 320 && editor.document.height === 200,
+  editor.document.width + '×' + editor.document.height);
+
+store.addAvatar();
+await sleep(250);
+await store.useBuiltinSkin('alex');
+await sleep(700);
+store.addAvatar();
+await sleep(250);
+const layerA = editor.layers[0];
+const layerB = editor.layers[1];
+store.updateLayer(layerA.id, { x: 90, y: 100, size: 120, rotation: 15, opacity: 0.8, overlay: false });
+store.updateLayer(layerB.id, { x: 230, y: 60, size: 80, rotation: -20, opacity: 1, overlay: true });
+await sleep(400);
+check('准备好一张底图加两个头像', editor.layers.length === 2, 'layers=' + editor.layers.length);
 
 const presetsBefore = editor.presets.length;
-store.savePresetFromSelection();
-await sleep(300);
-check('保存当前头像为预设', editor.presets.length === presetsBefore + 1, 'presets=' + editor.presets.length);
+store.saveCurrentAsPreset();
+await sleep(400);
+check('把整张图存为预设', editor.presets.length === presetsBefore + 1, 'presets=' + editor.presets.length);
 
 const saved = editor.presets[0];
-check('预设内嵌了皮肤位图', !!saved.skin && /^data:image\/png;base64,/.test(saved.skin.dataUrl),
-  saved.skin ? saved.skin.dataUrl.slice(0, 24) + '… 共 ' + saved.skin.dataUrl.length + ' 字符' : 'null');
-// 预设是"当前头像的快照"，所以要跟被保存的那个图层比，而不是跟默认值比 ——
-// 前面的帽子层开关用例会把状态改掉，硬写 true/false 都会偶发误报。
-const sourceLayer = editor.layers.find((l) => l.id === saved.sourceLayerId) || editor.layers[0];
-check('预设带上了尺寸与帽子层状态',
-  saved.size === sourceLayer.size && saved.overlay === sourceLayer.overlay,
-  '预设 size=' + saved.size + ' overlay=' + saved.overlay + ' / 图层 ' + sourceLayer.size + ' ' + sourceLayer.overlay);
+check('预设自带底图（data URI，不依赖外部地址）',
+  !!saved.base && saved.base.kind === 'data' && /^data:image\/png;base64,/.test(saved.base.value),
+  saved.base ? saved.base.kind + ' · ' + saved.base.value.length + ' 字符' : 'null');
+check('预设记下了画布尺寸与全部头像',
+  saved.width === 320 && saved.height === 200 && saved.layers.length === 2,
+  saved.width + '×' + saved.height + ' · ' + saved.layers.length + ' 个头像');
+check('预设逐层记下了变换与内嵌皮肤',
+  saved.layers[0].size === 120 && saved.layers[0].rotation === 15 && Math.abs(saved.layers[0].opacity - 0.8) < 1e-6
+    && saved.layers[0].overlay === false && !!saved.layers[0].skin && !!saved.layers[1].skin,
+  JSON.stringify({ size: saved.layers[0].size, rot: saved.layers[0].rotation, overlay: saved.layers[0].overlay, skin: !!saved.layers[0].skin }));
 
-const stored = localStorage.getItem('blockface.presets.v1');
+const stored = localStorage.getItem('blockface.presets.v2');
 let storedCount = -1;
 try { storedCount = JSON.parse(stored).length; } catch { storedCount = -1; }
 check('预设已写入 localStorage', storedCount === editor.presets.length, '条目=' + storedCount);
 
 const json = serializePresetFile(editor.presets);
-check('导出的 JSON 能被解析回同样数量', parsePresetFile(json).length === editor.presets.length, json.length + ' 字符');
+const reparsed = parsePresetFile(json);
+check('导出的 JSON 能被解析回同样内容',
+  reparsed.length === editor.presets.length && reparsed[0].layers.length === 2 && reparsed[0].base.kind === 'data',
+  json.length + ' 字符');
 
 await store.importPresets(new File([json], 'presets.json', { type: 'application/json' }));
-await sleep(400);
+await sleep(500);
 check('导入后预设数量翻倍', editor.presets.length === (presetsBefore + 1) * 2, 'presets=' + editor.presets.length);
 check('导入不与已有预设重名', new Set(editor.presets.map((p) => p.name)).size === editor.presets.length,
   editor.presets.map((p) => p.name).join(' / '));
 
-const layersBefore = editor.layers.length;
+// 套用 = 整张替换：先清空画布，再套用，看能不能原样回来
+store.clearBaseImage();
+for (const item of [...editor.layers]) store.removeLayer(item.id);
+await sleep(400);
+check('清空后画布确实是空的',
+  editor.layers.length === 0 && !editor.baseImageId && editor.document.width === 1280,
+  'layers=' + editor.layers.length + ' base=' + editor.baseImageId + ' ' + editor.document.width + '×' + editor.document.height);
+
 const target = editor.presets[0];
 await store.applyPreset(target.id);
-await sleep(700);
-const applied = editor.layers[editor.layers.length - 1];
-check('套用预设新增了一个图层', editor.layers.length === layersBefore + 1, 'layers=' + editor.layers.length);
-check('套用预设还原了尺寸与帽子层', !!applied && Math.abs(applied.size - target.size) <= 1 && applied.overlay === target.overlay,
-  applied ? 'size=' + applied.size + '(' + target.size + ') overlay=' + applied.overlay : 'null');
-check('套用预设登记了来源为 preset 的新皮肤',
-  editor.skins.some((s) => s.origin === 'preset' && s.sourceLabel === target.name),
+await sleep(1100);
+check('套用预设后底图与尺寸一起回来了',
+  !!editor.baseImageId && editor.document.width === 320 && editor.document.height === 200,
+  'base=' + editor.baseImageId + ' ' + editor.document.width + '×' + editor.document.height);
+check('套用预设后头像数量一致', editor.layers.length === 2, 'layers=' + editor.layers.length);
+const restored = editor.layers[0];
+check('套用预设逐层还原了变换',
+  restored.size === 120 && restored.rotation === 15 && Math.abs(restored.opacity - 0.8) < 1e-6 && restored.overlay === false,
+  JSON.stringify({ size: restored.size, rot: restored.rotation, opacity: restored.opacity, overlay: restored.overlay }));
+check('套用预设登记了来源为 preset 的皮肤',
+  editor.skins.filter((s) => s.origin === 'preset' && s.sourceLabel === target.name).length === 2,
   editor.skins.map((s) => s.origin).join(','));
+
+// 画布上真的画了底图：左上角 40×40 那块是 #d9a441
+const tplDoc = document.querySelector('.artboard__doc');
+const tplRect = document.querySelector('.artboard').getBoundingClientRect();
+const tplScale = (tplRect.width - 2) / editor.document.width;
+const tplDpr = Math.min(window.devicePixelRatio || 1, 2);
+const readTplDoc = (x, y) => Array.from(tplDoc.getContext('2d').getImageData(Math.round(x * tplScale * tplDpr), Math.round(y * tplScale * tplDpr), 1, 1).data);
+const corner = readTplDoc(6, 6);
+check('套用后画布上画着底图',
+  Math.abs(corner[0] - 217) <= 2 && Math.abs(corner[1] - 164) <= 2 && Math.abs(corner[2] - 65) <= 2,
+  '左上角=' + JSON.stringify(corner) + ' 期望≈[217,164,65]');
+
+store.undo();
+await sleep(500);
+check('套用预设是一次可撤销的整张替换',
+  editor.layers.length === 0 && !editor.baseImageId,
+  'layers=' + editor.layers.length + ' base=' + editor.baseImageId);
+store.redo();
+await sleep(900);
+check('重做又能整张回来', editor.layers.length === 2 && !!editor.baseImageId,
+  'layers=' + editor.layers.length + ' base=' + editor.baseImageId);
 
 const beforeRemove = editor.presets.length;
 store.removePreset(target.id);
@@ -369,7 +437,12 @@ check('垃圾文件被拒绝且不影响已有预设',
   editor.presets.length === beforeRemove - 1 && editor.notice && editor.notice.tone === 'error',
   (editor.notice && editor.notice.message) + ' / presets=' + editor.presets.length);
 
-localStorage.removeItem('blockface.presets.v1');
+localStorage.removeItem('blockface.presets.v2');
+
+// 本节故意用了 0.8 不透明度与旋转来验证还原；后面的导出用例要求不透明、不旋转的图层，
+// 所以这里把这两项恢复成默认值，别把状态漏给下一节。
+for (const item of editor.layers) store.updateLayer(item.id, { opacity: 1, rotation: 0 });
+await sleep(300);
 
 // ============ 9. 导出管线 ============
 const { composeDocument } = await import('/src/core/render/compose.ts');
@@ -406,9 +479,12 @@ check('导出画布的像素 = 离屏头像同点像素（颜色没被底纹混�
   '导出=' + JSON.stringify(soloPixel) + ' 离屏=' + JSON.stringify(soloHeadPixel));
 
 // ============ 8c. 图层前后顺序 ============
-// 干净的舞台：清空后放两层完全重叠，谁在上面那一格就显示谁
+// 干净的舞台：清空后放两层完全重叠，谁在上面那一格就显示谁。
+// 上一节留下的是 320×200 的底图，这里连底图一起清掉，回到默认画布，
+// 否则下面按 1280×800 摆的坐标会被夹到画布外，读到的全是透明像素。
+store.clearBaseImage();
 for (const item of [...editor.layers]) store.removeLayer(item.id);
-await sleep(250);
+await sleep(300);
 document.querySelectorAll('.rail--l .bf-card')[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
 await sleep(600);
 store.addAvatar();
