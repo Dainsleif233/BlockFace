@@ -38,6 +38,14 @@ const accountText = ref('');
 
 const busy = computed(() => editor.busy !== null);
 
+/** 预设列表：缩略图取第一个带皮肤的图层，一眼能认出是哪一组头像 */
+const presetRows = computed(() =>
+  editor.presets.map((preset) => ({
+    ...preset,
+    face: preset.layers.find((layer) => layer.skin)?.skin?.dataUrl ?? null,
+  })),
+);
+
 function builtinRecord(id: string): (typeof editor.skins)[number] | null {
   return editor.skins.find((s) => s.id === 'builtin-' + id) ?? null;
 }
@@ -227,33 +235,33 @@ async function onDrop(event: DragEvent): Promise<void> {
           </span>
         </div>
 
-        <p class="bf-note">预设存的是<strong>整张图</strong>：底图、画布尺寸和上面的每个头像一起打包。套用会把当前画布整体换掉，撤销一次就能退回来。</p>
+        <p class="bf-note">预设存的是这张图上<strong>全部头像</strong>的信息：位置、大小、旋转、不透明度、帽子层、翻转和各自的皮肤。套用会用它们替换画布上的头像，<strong>底图不动</strong>，撤销一次就能退回来。</p>
 
         <button
           class="bf-btn bf-btn--sm preset__save"
           type="button"
-          :disabled="!editor.layers.length && !editor.baseImage"
-          :title="editor.layers.length || editor.baseImage ? '把当前整张图（底图 + 全部头像）存成预设' : '画布还是空的，先载入底图或放个头像'"
+          :disabled="!editor.layers.length"
+          :title="editor.layers.length ? '把这张图上的全部头像存成一个预设' : '画布上还没有头像'"
           @click="saveCurrentAsPreset"
         >
-          保存整张为预设
+          保存全部头像为预设
         </button>
         <input ref="presetInput" class="bf-sr-only" type="file" accept="application/json,.json" @change="onPresetFile" />
 
         <ul v-if="editor.presets.length" class="rows">
-          <li v-for="preset in editor.presets" :key="preset.id">
+          <li v-for="preset in presetRows" :key="preset.id">
             <div class="bf-lay">
               <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR.preset }" aria-hidden="true" />
               <button
                 type="button"
                 class="row__pick"
-                :title="'套用「' + preset.name + '」：' + preset.width + '×' + preset.height + '，' + preset.layers.length + ' 个头像（会替换当前画布，可撤销）'"
+                :title="'套用「' + preset.name + '」：' + preset.layers.length + ' 个头像会替换画布上的头像，底图不动（可撤销）'"
                 @click="applyPreset(preset.id)"
               >
                 <span
                   class="bf-face preset-face"
-                  :class="{ 'preset-face--empty': !(preset.base && preset.base.kind === 'data') }"
-                  :style="preset.base && preset.base.kind === 'data' ? { backgroundImage: 'url(' + preset.base.value + ')' } : undefined"
+                  :class="{ 'preset-face--empty': !preset.face }"
+                  :style="preset.face ? { backgroundImage: 'url(' + preset.face + ')' } : undefined"
                 />
                 <span class="bf-lay-n">{{ preset.name }}</span>
               </button>

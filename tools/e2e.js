@@ -354,18 +354,18 @@ await sleep(400);
 check('把整张图存为预设', editor.presets.length === presetsBefore + 1, 'presets=' + editor.presets.length);
 
 const saved = editor.presets[0];
-check('预设自带底图（data URI，不依赖外部地址）',
-  !!saved.base && saved.base.kind === 'data' && /^data:image\/png;base64,/.test(saved.base.value),
-  saved.base ? saved.base.kind + ' · ' + saved.base.value.length + ' 字符' : 'null');
-check('预设记下了画布尺寸与全部头像',
-  saved.width === 320 && saved.height === 200 && saved.layers.length === 2,
-  saved.width + '×' + saved.height + ' · ' + saved.layers.length + ' 个头像');
+check('预设只装头像，不含底图与画布尺寸',
+  !('base' in saved) && !('width' in saved) && !('height' in saved),
+  Object.keys(saved).sort().join(','));
+check('预设记下了这张图上的全部头像',
+  saved.layers.length === 2 && saved.layers[0].size === 120 && saved.layers[1].size === 80,
+  saved.layers.length + ' 个头像 · ' + JSON.stringify(saved.layers.map((l) => ({ x: l.x, size: l.size }))));
 check('预设逐层记下了变换与内嵌皮肤',
   saved.layers[0].size === 120 && saved.layers[0].rotation === 15 && Math.abs(saved.layers[0].opacity - 0.8) < 1e-6
     && saved.layers[0].overlay === false && !!saved.layers[0].skin && !!saved.layers[1].skin,
   JSON.stringify({ size: saved.layers[0].size, rot: saved.layers[0].rotation, overlay: saved.layers[0].overlay, skin: !!saved.layers[0].skin }));
 
-const stored = localStorage.getItem('blockface.presets.v2');
+const stored = localStorage.getItem('blockface.presets.v3');
 let storedCount = -1;
 try { storedCount = JSON.parse(stored).length; } catch { storedCount = -1; }
 check('预设已写入 localStorage', storedCount === editor.presets.length, '条目=' + storedCount);
@@ -373,7 +373,7 @@ check('预设已写入 localStorage', storedCount === editor.presets.length, '�
 const json = serializePresetFile(editor.presets);
 const reparsed = parsePresetFile(json);
 check('导出的 JSON 能被解析回同样内容',
-  reparsed.length === editor.presets.length && reparsed[0].layers.length === 2 && reparsed[0].base.kind === 'data',
+  reparsed.length === editor.presets.length && reparsed[0].layers.length === 2 && !!reparsed[0].layers[0].skin,
   json.length + ' 字符');
 
 await store.importPresets(new File([json], 'presets.json', { type: 'application/json' }));
@@ -382,21 +382,22 @@ check('导入后预设数量翻倍', editor.presets.length === (presetsBefore + 
 check('导入不与已有预设重名', new Set(editor.presets.map((p) => p.name)).size === editor.presets.length,
   editor.presets.map((p) => p.name).join(' / '));
 
-// 套用 = 整张替换：先清空画布，再套用，看能不能原样回来
-store.clearBaseImage();
+// 套用 = 用预设里的这组头像替换画布上的头像；底图与画布尺寸一概不动
+const baseIdBefore = editor.baseImageId;
+const docBefore = editor.document.width + '×' + editor.document.height;
 for (const item of [...editor.layers]) store.removeLayer(item.id);
 await sleep(400);
-check('清空后画布确实是空的',
-  editor.layers.length === 0 && !editor.baseImageId && editor.document.width === 1280,
+check('删掉全部头像后底图还在、尺寸没变',
+  editor.layers.length === 0 && editor.baseImageId === baseIdBefore && editor.document.width + '×' + editor.document.height === docBefore,
   'layers=' + editor.layers.length + ' base=' + editor.baseImageId + ' ' + editor.document.width + '×' + editor.document.height);
 
 const target = editor.presets[0];
 await store.applyPreset(target.id);
 await sleep(1100);
-check('套用预设后底图与尺寸一起回来了',
-  !!editor.baseImageId && editor.document.width === 320 && editor.document.height === 200,
-  'base=' + editor.baseImageId + ' ' + editor.document.width + '×' + editor.document.height);
-check('套用预设后头像数量一致', editor.layers.length === 2, 'layers=' + editor.layers.length);
+check('套用预设没有动底图，也没动画布尺寸',
+  editor.baseImageId === baseIdBefore && editor.document.width + '×' + editor.document.height === docBefore,
+  'base=' + editor.baseImageId + '(' + baseIdBefore + ') ' + editor.document.width + '×' + editor.document.height);
+check('套用预设把这一组头像放回来了', editor.layers.length === 2, 'layers=' + editor.layers.length);
 const restored = editor.layers[0];
 check('套用预设逐层还原了变换',
   restored.size === 120 && restored.rotation === 15 && Math.abs(restored.opacity - 0.8) < 1e-6 && restored.overlay === false,
@@ -412,18 +413,22 @@ const tplScale = (tplRect.width - 2) / editor.document.width;
 const tplDpr = Math.min(window.devicePixelRatio || 1, 2);
 const readTplDoc = (x, y) => Array.from(tplDoc.getContext('2d').getImageData(Math.round(x * tplScale * tplDpr), Math.round(y * tplScale * tplDpr), 1, 1).data);
 const corner = readTplDoc(6, 6);
-check('套用后画布上画着底图',
+check('底图始终还在画布上（预设没把它顶掉）',
   Math.abs(corner[0] - 217) <= 2 && Math.abs(corner[1] - 164) <= 2 && Math.abs(corner[2] - 65) <= 2,
   '左上角=' + JSON.stringify(corner) + ' 期望≈[217,164,65]');
 
+const avatarPixel = readTplDoc(90, 100);
+check('头像也画在原来的位置上', avatarPixel[3] === 255 && !(avatarPixel[0] === 217 && avatarPixel[1] === 164 && avatarPixel[2] === 65),
+  '头像中心=' + JSON.stringify(avatarPixel));
+
 store.undo();
 await sleep(500);
-check('套用预设是一次可撤销的整张替换',
-  editor.layers.length === 0 && !editor.baseImageId,
+check('套用预设是一次可撤销的替换',
+  editor.layers.length === 0 && editor.baseImageId === baseIdBefore,
   'layers=' + editor.layers.length + ' base=' + editor.baseImageId);
 store.redo();
 await sleep(900);
-check('重做又能整张回来', editor.layers.length === 2 && !!editor.baseImageId,
+check('重做又能把这一组头像放回来', editor.layers.length === 2 && editor.baseImageId === baseIdBefore,
   'layers=' + editor.layers.length + ' base=' + editor.baseImageId);
 
 const beforeRemove = editor.presets.length;
@@ -437,7 +442,7 @@ check('垃圾文件被拒绝且不影响已有预设',
   editor.presets.length === beforeRemove - 1 && editor.notice && editor.notice.tone === 'error',
   (editor.notice && editor.notice.message) + ' / presets=' + editor.presets.length);
 
-localStorage.removeItem('blockface.presets.v2');
+localStorage.removeItem('blockface.presets.v3');
 
 // 本节故意用了 0.8 不透明度与旋转来验证还原；后面的导出用例要求不透明、不旋转的图层，
 // 所以这里把这两项恢复成默认值，别把状态漏给下一节。

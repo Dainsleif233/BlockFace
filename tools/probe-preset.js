@@ -1,4 +1,4 @@
-/** 预设的真实落盘：拼一张"底图 + 两个头像"的图，存成预设，点导出，看 JSON 文件有没有真的下载下来 */
+/** 预设的真实落盘：在一张底图上摆两个头像，把这两个头像存成预设，点导出，看 JSON 文件有没有真的下载下来 */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 await sleep(2600);
 const store = window.__blockface;
@@ -43,12 +43,12 @@ await sleep(2000);
 return {
   presets: editor.presets.length,
   presetName: preset ? preset.name : null,
-  baseKind: preset && preset.base ? preset.base.kind : null,
-  baseBytes: preset && preset.base ? preset.base.value.length : 0,
+  presetKeys: preset ? Object.keys(preset).sort().join(',') : null,
   layerCount: preset ? preset.layers.length : 0,
   layerSkins: preset ? preset.layers.filter((l) => l.skin).length : 0,
-  document: preset ? preset.width + '×' + preset.height : null,
+  canvasKeepsBase: !!editor.baseImageId,
+  document: editor.document.width + '×' + editor.document.height,
   totalBytes: preset ? JSON.stringify(preset).length : 0,
   notice: editor.notice ? editor.notice.tone + ': ' + editor.notice.message : null,
-  expectedFilename: 'blockface-templates-*.json',
+  expectedFilename: 'blockface-presets-*.json',
 };

@@ -8,16 +8,12 @@ import { computed, reactive, ref } from 'vue';
 import {
   countEmbeddedImages,
   isSafeImageDataUrl,
-  MAX_BASE_DATA_URL,
   MAX_PRESETS,
-  MAX_TEMPLATE_BYTES,
   parsePresetFile,
-  presetByteSize,
   PresetParseError,
   serializePresetFile,
   suggestPresetFilename,
   type Preset,
-  type PresetBase,
   type PresetLayer,
   type PresetSkin,
 } from '../core/model/preset';
@@ -43,11 +39,6 @@ import { assertUsableSkin, describeSkin, type SkinOrigin, type SkinTexture } fro
 
 const baseImages = new Map<string, HTMLImageElement>();
 const skins = new Map<string, SkinTexture>();
-/**
- * 底图的原始来源（data URI 或 https 链接）。data URI 可能好几 MB，
- * 放进响应式 state 会被深度代理，所以跟图片元素一样只在登记表里留一份。
- */
-const baseSources = new Map<string, PresetBase>();
 
 export function getBaseImage(id: string | null): HTMLImageElement | null {
   return id ? baseImages.get(id) ?? null : null;
@@ -536,16 +527,6 @@ export async function useSkinUrl(rawUrl: string): Promise<void> {
  * 底图与文档
  * ------------------------------------------------------------------ */
 
-/** File → data URI；模板要自包含地保存底图，所以载入时顺手留一份 */
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'));
-    reader.readAsDataURL(file);
-  });
-}
-
 export async function setBaseImage(file: File): Promise<void> {
   state.busy = '读取图片';
   try {
@@ -562,17 +543,6 @@ export async function setBaseImage(file: File): Promise<void> {
         tainted: loaded.tainted,
       };
       baseMeta.set(id, meta);
-      // 存模板时要能原样还原底图：原始字节直接留成 data URI，不重新编码（重编码会把 JPEG 撑大）
-      try {
-        const dataUrl = await fileToDataUrl(file);
-        if (isSafeImageDataUrl(dataUrl, MAX_BASE_DATA_URL)) {
-          baseSources.set(id, { kind: 'data', value: dataUrl, width: loaded.width, height: loaded.height });
-        } else {
-          baseSources.delete(id);
-        }
-      } catch {
-        baseSources.delete(id);
-      }
       commit();
       state.baseImageId = id;
       state.baseImage = meta;
@@ -596,7 +566,6 @@ export async function setBaseImage(file: File): Promise<void> {
 
 export function clearBaseImage(): void {
   commit();
-  if (state.baseImageId) baseSources.delete(state.baseImageId);
   state.baseImageId = null;
   state.baseImage = null;
   state.document = { ...DEFAULT_DOCUMENT };
@@ -654,15 +623,14 @@ export function previewCanvas(scale = 1): HTMLCanvasElement | null {
 }
 
 /* ------------------------------------------------------------------ *
- * 预设（整张图片模板）
+ * 预设（一张图上的全部头像）
  *
- * 预设 = 底图 + 画布尺寸 + 全部头像图层，每个图层自带皮肤位图。
- * 存的是"这张图是怎么拼出来的"，所以套用一次就能原样回到当时的样子。
- * 位图全部以 data URI 内嵌：文件自包含、换机器能用，代价是体积大，
- * 因此写入 localStorage 前会按体积裁剪，并在放不下时明确告诉用户导出成文件。
+ * 预设 = 这张图上所有头像的信息：位置、大小、旋转、不透明度、帽子层、翻转、显隐，
+ * 以及各自的皮肤位图（data URI 内嵌，所以文件自包含、换机器能用）。
+ * 不含底图：底图是用户自己的照片，套用预设只替换头像，不动图片本身。
  * ------------------------------------------------------------------ */
 
-const PRESET_STORAGE_KEY = 'blockface.presets.v2';
+const PRESET_STORAGE_KEY = 'blockface.presets.v3';
 
 function storage(): Storage | null {
   try {
@@ -676,15 +644,20 @@ function storage(): Storage | null {
 function persistPresets(): void {
   const store = storage();
   if (!store) return;
-  // localStorage 通常只有 5MB，而模板自带底图，很容易顶到上限。
-  // 策略是保住最新的几个：写不进去就从最旧的开始丢，而不是整个失败。
+  // 预设本身只是几 KB 的皮肤位图，一般不会顶到 localStorage 上限；
+  // 但数量多或皮肤特别大时仍可能写不进去，那时的策略是保住最新的几个，而不是整个失败。
   let keep = state.presets.length;
   for (; keep >= 0; keep -= 1) {
     const subset = state.presets.slice(0, keep);
     try {
       store.setItem(PRESET_STORAGE_KEY, JSON.stringify(subset));
       if (keep < state.presets.length) {
-        notify('warn', `本地存储放不下全部预设，只有最新的 ${keep} 个能在刷新后保留；建议导出成文件`);
+        notify(
+          'warn',
+          keep === 0
+            ? '预设太大，没能存进浏览器，刷新后会丢失；先导出成文件更稳妥'
+            : `本地存储放不下全部预设，只有最新的 ${keep} 个能在刷新后保留；建议导出成文件`,
+        );
       }
       return;
     } catch {
@@ -740,8 +713,8 @@ export function saveCurrentAsPreset(): void {
     notify('warn', `预设最多 ${MAX_PRESETS} 个，先删掉几个再存`);
     return;
   }
-  if (state.layers.length === 0 && !state.baseImage) {
-    notify('warn', '画布还是空的：先载入底图或放一个头像');
+  if (state.layers.length === 0) {
+    notify('warn', '画布上还没有头像，先放一个再存');
     return;
   }
 
@@ -771,37 +744,26 @@ export function saveCurrentAsPreset(): void {
 
   const preset: Preset = {
     id: createId('preset'),
-    name: uniquePresetName(state.baseImage ? state.baseImage.name : '模板'),
+    name: uniquePresetName(state.baseImage ? state.baseImage.name : `${layers.length} 个头像`),
     createdAt: Date.now(),
-    width: state.document.width,
-    height: state.document.height,
-    base: state.baseImageId ? baseSources.get(state.baseImageId) ?? null : null,
     layers,
   };
 
-  const bytes = presetByteSize(preset);
   state.presets.unshift(preset);
-
-  if (bytes > MAX_TEMPLATE_BYTES) {
-    notify(
-      'warn',
-      `已存为预设「${preset.name}」，但它有 ${(bytes / 1048576).toFixed(1)}MB，太大没法留在浏览器里，请导出成文件`,
-    );
-    return;
-  }
   persistPresets();
   const pictures = countEmbeddedImages(preset);
   notify(
     missingSkin ? 'warn' : 'success',
     missingSkin
       ? `已存为预设「${preset.name}」，但有 ${missingSkin} 个头像的皮肤没能一起存进去`
-      : `已把整张图存为预设「${preset.name}」（底图 + ${layers.length} 个头像，内嵌 ${pictures} 张位图）`,
+      : `已把这张图上的 ${layers.length} 个头像存为预设「${preset.name}」（内嵌 ${pictures} 张皮肤）`,
   );
 }
 
 /**
- * 套用预设：整张图还原 —— 画布尺寸、底图、全部头像图层。
- * 是一次性替换而不是叠加，所以撤销一次就能退回套用前的整张图。
+ * 套用预设：用预设里的这组头像替换当前画布上的全部头像。
+ * 底图与画布尺寸一概不动 —— 预设管的是头像，图片是用户自己的。
+ * 整个过程只收一条历史，撤销一次就回到套用前的样子。
  */
 export async function applyPreset(id: string): Promise<void> {
   const preset = state.presets.find((p) => p.id === id);
@@ -809,11 +771,7 @@ export async function applyPreset(id: string): Promise<void> {
 
   state.busy = `载入预设 ${preset.name}`;
   try {
-    // 要用的位图先全部解出来：中途失败就保持原样，不把画布搅成半成品
-    let loadedBase: LoadedImage | null = null;
-    if (preset.base) {
-      loadedBase = await loadImage(preset.base.value, { cors: preset.base.kind === 'url' });
-    }
+    // 要用的皮肤先全部解出来：中途失败就保持原样，不把画布搅成半成品
     const ready: { layer: PresetLayer; loaded: LoadedImage }[] = [];
     for (const item of preset.layers) {
       if (!item.skin) continue;
@@ -824,26 +782,6 @@ export async function applyPreset(id: string): Promise<void> {
 
     commit();
 
-    if (preset.base && loadedBase) {
-      const baseId = createId('base');
-      baseImages.set(baseId, loadedBase.element);
-      const meta: BaseImageMeta = {
-        id: baseId,
-        name: preset.name,
-        width: loadedBase.width,
-        height: loadedBase.height,
-        tainted: loadedBase.tainted,
-      };
-      baseMeta.set(baseId, meta);
-      baseSources.set(baseId, { ...preset.base, width: loadedBase.width, height: loadedBase.height });
-      state.baseImageId = baseId;
-      state.baseImage = meta;
-    } else {
-      state.baseImageId = null;
-      state.baseImage = null;
-    }
-
-    state.document = { width: preset.width, height: preset.height };
     state.layers.length = 0;
     for (const item of ready) {
       const skinId = createId('skin');
@@ -874,11 +812,7 @@ export async function applyPreset(id: string): Promise<void> {
     state.view.autoFit = true;
 
     const skipped = preset.layers.length - ready.length;
-    const parts = [
-      preset.base ? '底图' : '空白画布',
-      `${state.document.width}×${state.document.height}`,
-      `${ready.length} 个头像`,
-    ];
+    const parts = [`${ready.length} 个头像`, '底图未改动'];
     if (skipped > 0) parts.push(`${skipped} 个头像的皮肤缺失`);
     notify(skipped > 0 ? 'warn' : 'success', `已套用预设「${preset.name}」：${parts.join(' · ')}`);
   } catch (error) {

@@ -1,6 +1,6 @@
 /**
- * 预设文件的往返：把当前这张图存成预设 → 序列化成文件内容 → 清空一切 → 当成外部文件导入 → 套用。
- * 走的是 parsePresetFile / applyPreset 的真实路径，验证"换台机器也能还原"。
+ * 预设文件的往返：底图上摆好两个头像 → 存成预设 → 序列化成文件内容 → 删掉画布上的头像 →
+ * 当成外部文件导入 → 套用。验证"头像信息能原样回来，而底图自始至终没被动过"。
  */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 await sleep(2600);
@@ -12,7 +12,7 @@ const { renderHeadCanvas } = await import('/src/core/render/head.ts');
 const results = [];
 const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail: detail === undefined ? '' : String(detail) });
 
-// 1. 拼一张有底图、有两个头像的图
+// 1. 一张底图 + 两个头像
 store.clearBaseImage();
 for (const item of [...editor.layers]) store.removeLayer(item.id);
 await sleep(300);
@@ -39,42 +39,40 @@ store.updateLayer(editor.layers[0].id, { x: 110, y: 130, size: 140, rotation: 0,
 store.updateLayer(editor.layers[1].id, { x: 290, y: 120, size: 100, rotation: 0, opacity: 1, overlay: true });
 await sleep(400);
 
+const baseIdBefore = editor.baseImageId;
 store.saveCurrentAsPreset();
 await sleep(400);
 const saved = editor.presets[0];
-check('先存出一个预设', !!saved, 'presets=' + editor.presets.length);
+check('先在一张底图上存出一个预设', !!saved, 'presets=' + editor.presets.length);
 const fileText = serializePresetFile(editor.presets);
-check('序列化后的文件自带底图与两个头像的皮肤',
-  fileText.indexOf('"kind": "data"') > 0 && (fileText.match(/data:image\/png;base64,/g) || []).length >= 3,
-  fileText.length + ' 字符，内嵌位图 ' + (fileText.match(/data:image\/png;base64,/g) || []).length + ' 张');
+// 只断言没有 base 字段：skin 里本来就有 width/height（那是贴图尺寸，不是画布尺寸）
+check('预设文件只装头像的皮肤，不含底图',
+  fileText.indexOf('"base"') < 0 && (fileText.match(/data:image\/png;base64,/g) || []).length === 2,
+  fileText.length + ' 字符，内嵌皮肤 ' + (fileText.match(/data:image\/png;base64,/g) || []).length + ' 张');
 
-// 2. 清空一切，模拟"另一台机器刚打开"
-localStorage.clear();
-editor.presets.length = 0;
-store.clearBaseImage();
+// 2. 删掉画布上的头像，底图留着不动，模拟"换一张图重新摆"
 for (const item of [...editor.layers]) store.removeLayer(item.id);
+editor.presets.length = 0;
 await sleep(500);
-check('清空后确实什么都没有', editor.presets.length === 0 && editor.layers.length === 0 && !editor.baseImageId,
-  'presets=' + editor.presets.length + ' layers=' + editor.layers.length + ' base=' + editor.baseImageId);
+check('清空头像后底图还在',
+  editor.layers.length === 0 && editor.baseImageId === baseIdBefore,
+  'layers=' + editor.layers.length + ' base=' + editor.baseImageId);
 
 // 3. 把那段文本当成外部文件导入
-await store.importPresets(new File([fileText], 'blockface-templates.json', { type: 'application/json' }));
+await store.importPresets(new File([fileText], 'blockface-presets.json', { type: 'application/json' }));
 await sleep(600);
 check('导入后拿到 1 个预设', editor.presets.length === 1, 'presets=' + editor.presets.length);
 const preset = editor.presets[0];
-check('预设名字与画布尺寸跟着文件过来',
-  !!preset && preset.name === saved.name && preset.width === 400 && preset.height === 260,
-  preset ? preset.name + ' ' + preset.width + '×' + preset.height : 'null');
-check('底图是内嵌型（不依赖外部地址）', !!preset && !!preset.base && preset.base.kind === 'data',
-  preset && preset.base ? preset.base.kind + ' · ' + preset.base.value.length + ' 字符' : 'null');
+check('预设名字与头像数量跟着文件过来',
+  !!preset && preset.name === saved.name && preset.layers.length === 2,
+  preset ? preset.name + ' · ' + preset.layers.length + ' 个头像' : 'null');
 
-// 4. 套用：整张图应该原样回来
+// 4. 套用：两个头像应该回到原来的位置，底图不受影响
 await store.applyPreset(preset.id);
 await sleep(1200);
-check('套用后底图与画布尺寸回来了',
-  !!editor.baseImageId && editor.document.width === 400 && editor.document.height === 260,
-  'base=' + editor.baseImageId + ' ' + editor.document.width + '×' + editor.document.height);
-check('套用后两个头像都在', editor.layers.length === 2, 'layers=' + editor.layers.length);
+check('套用后两个头像都回来了', editor.layers.length === 2, 'layers=' + editor.layers.length);
+check('底图自始至终没被动过', editor.baseImageId === baseIdBefore && editor.document.width === 400 && editor.document.height === 260,
+  'base=' + editor.baseImageId + '(' + baseIdBefore + ') ' + editor.document.width + '×' + editor.document.height);
 check('逐层变换与帽子层状态都对得上',
   editor.layers[0].size === 140 && editor.layers[0].overlay === false && editor.layers[0].x === 110
     && editor.layers[1].size === 100 && editor.layers[1].overlay === true && editor.layers[1].x === 290,
@@ -96,13 +94,13 @@ const docCanvas = document.querySelector('.artboard__doc');
 const drawn = Array.from(docCanvas.getContext('2d').getImageData(
   Math.round((layer.x - layer.size / 2 + layer.size * rel) * viewScale * dpr),
   Math.round((layer.y - layer.size / 2 + layer.size * rel) * viewScale * dpr), 1, 1).data);
-check('导入的皮肤真的画到了画布上（与离屏画布同点同色）',
+check('导入的头像真的画到了画布上（与离屏画布同点同色）',
   drawn[3] === 255 && drawn[0] === headPixel[0] && drawn[1] === headPixel[1] && drawn[2] === headPixel[2],
   '屏幕=' + JSON.stringify(drawn) + ' 离屏=' + JSON.stringify(headPixel));
 
 const basePixel = Array.from(docCanvas.getContext('2d').getImageData(
   Math.round(6 * viewScale * dpr), Math.round(6 * viewScale * dpr), 1, 1).data);
-check('底图也画上去了（左上角是底图的黄色块）',
+check('底图也一直画着（左上角是底图的黄色块）',
   Math.abs(basePixel[0] - 233) <= 2 && Math.abs(basePixel[1] - 196) <= 2 && Math.abs(basePixel[2] - 106) <= 2,
   '左上角=' + JSON.stringify(basePixel) + ' 期望≈[233,196,106]');
 
