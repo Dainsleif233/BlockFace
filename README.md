@@ -97,6 +97,7 @@ tools/                   自建的验证工具链（见下）
 | `probe-layerdrag-pre/post.js` | 配 `--drag` 用真实鼠标按住图层行拖动，验证排序与历史粒度 |
 | `probe-preset.js` | 拼一张"底图 + 两个头像"的图存成预设并点导出，验证 JSON 真的落盘 |
 | `probe-preset-import.js` | 把模板序列化成文件内容 → 清空画布 → 当成外部文件导入 → 套用，验证底图、逐层变换与像素都原样回来 |
+| `probe-shot.js` | 摆出一个"底图 + 两个头像 + 一个预设"的展示状态，用来出验收截图 |
 | `run-e2e.mjs` | 起临时 dev server + 跑 e2e 一条龙 |
 
 ## 许可
