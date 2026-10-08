@@ -79,6 +79,11 @@ describe('滚轮改尺寸', () => {
     expect(scaleSizeBy(200, 1 / 1.12, 16, 800)).toBe(179);
   });
 
+  it('倍率为 1 时保持原尺寸（如零读数或停止滚轮）', () => {
+    expect(scaleSizeBy(200, 1, 16, 800)).toBe(200);
+    expect(scaleSizeBy(16, 1, 16, 800)).toBe(16);
+  });
+
   it('小尺寸下每格至少动 1 像素', () => {
     expect(scaleSizeBy(16, 1.001, 16, 800)).toBe(17);
     expect(scaleSizeBy(17, 0.999, 16, 800)).toBe(16);

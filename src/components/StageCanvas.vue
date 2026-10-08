@@ -538,8 +538,8 @@ defineExpose({ schedule });
       @wheel="onWheel"
     >
       <div ref="stage" class="artboard" :style="stageStyle">
-        <canvas ref="docCanvas" class="artboard__doc" />
-        <canvas ref="overlayCanvas" class="artboard__overlay" />
+        <canvas ref="docCanvas" class="artboard__doc" role="img" aria-label="头像合成画布" />
+        <canvas ref="overlayCanvas" class="artboard__overlay" aria-hidden="true" />
       </div>
 
       <span v-if="hover" class="stage__tip" :style="{ left: hover.x + 'px', top: hover.y + 'px' }">

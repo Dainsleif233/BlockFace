@@ -552,7 +552,7 @@ export async function useAccountSkin(name: string): Promise<void> {
 }
 
 function isSkinFile(file: File): boolean {
-  return /^image\/(png|jpeg|webp)$/.test(file.type) || /\.(png|jpg|jpeg|webp)$/i.test(file.name);
+  return file.type === 'image/png' || /\.png$/i.test(file.name);
 }
 
 export async function useSkinFile(file: File): Promise<void> {
@@ -623,14 +623,14 @@ export async function setBaseImage(file: File): Promise<void> {
       beginChange();
       state.baseImageId = id;
       state.baseImage = meta;
-      endChange();
-      sweepUnusedBaseImages();
       state.document = { width: loaded.width, height: loaded.height };
       for (const layer of state.layers) {
         const next = clampLayerToDocument(layer, state.document.width, state.document.height);
         layer.x = next.x;
         layer.y = next.y;
       }
+      endChange();
+      sweepUnusedBaseImages();
       fitView();
       notify('success', `已载入底图 ${meta.name}（${meta.width}×${meta.height}）`);
     } finally {
@@ -990,7 +990,7 @@ function skinToDataUrl(skin: SkinTexture): string | null {
   }
 }
 
-/** 把当前整张画布（底图 + 全部头像）存成预设 */
+/** 把当前全部头像图层与皮肤排版存成预设（底图属于用户文档，不存入预设） */
 export function saveCurrentAsPreset(): void {
   if (state.presets.length >= MAX_PRESETS) {
     notify('warn', `预设最多 ${MAX_PRESETS} 个，先删掉几个再存`);

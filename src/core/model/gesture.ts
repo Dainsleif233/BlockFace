@@ -58,6 +58,7 @@ export function tidyAngle(degrees: number): number {
  * 所以放大时至少 +1、缩小时至少 -1，保证每一格滚轮都有反馈。
  */
 export function scaleSizeBy(size: number, factor: number, min: number, max: number): number {
+  if (factor === 1) return Math.min(max, Math.max(min, Math.round(size)));
   const scaled = size * factor;
   const stepped = factor > 1 ? Math.max(size + 1, Math.round(scaled)) : Math.min(size - 1, Math.round(scaled));
   return Math.min(max, Math.max(min, stepped));
