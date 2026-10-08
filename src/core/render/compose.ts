@@ -101,7 +101,8 @@ export function composeDocument(canvas: HTMLCanvasElement, options: ComposeOptio
     ctx.translate(layer.x, layer.y);
     ctx.rotate(toRadians(layer.rotation));
     if (layer.flipH) ctx.scale(-1, 1);
-    ctx.imageSmoothingEnabled = devicePixels < layer.size * scale - 0.5;
+    const isRotated = layer.rotation % 90 !== 0;
+    ctx.imageSmoothingEnabled = skin.meta.isCustomImage || isRotated || devicePixels < layer.size * scale - 0.5;
     ctx.drawImage(head, -layer.size / 2, -layer.size / 2, layer.size, layer.size);
     ctx.restore();
   }

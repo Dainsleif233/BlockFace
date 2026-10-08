@@ -529,9 +529,21 @@ export function useExistingSkin(skinId: string): void {
   applySkin(skinId);
 }
 
+/** 获取当前画布以及撤销/重做历史中所有被引用的皮肤素材 id */
+function getReferencedSkinIds(): Set<string> {
+  const ids = new Set(state.layers.map((l) => l.skinId));
+  for (const snap of past) {
+    for (const l of snap.layers) ids.add(l.skinId);
+  }
+  for (const snap of future) {
+    for (const l of snap.layers) ids.add(l.skinId);
+  }
+  return ids;
+}
+
 /**
  * 移除一张已登记的皮肤素材。
- * 若素材正在被画布上的图层引用，则拒绝删除以防画面破损；内置皮肤不可删除。
+ * 若素材正在被当前画布或撤销/重做历史上的图层引用，则拒绝删除以防画面破损；内置皮肤不可删除。
  */
 export function removeSkin(id: string): boolean {
   if (id.startsWith('builtin-')) {
@@ -541,6 +553,13 @@ export function removeSkin(id: string): boolean {
   const inUse = state.layers.some((l) => l.skinId === id);
   if (inUse) {
     notify('warn', '该素材正在被画布图层使用，请先删除对应图层或更换素材');
+    return false;
+  }
+  const inHistory =
+    past.some((s) => s.layers.some((l) => l.skinId === id)) ||
+    future.some((s) => s.layers.some((l) => l.skinId === id));
+  if (inHistory) {
+    notify('warn', '该素材在撤销/重做历史中被引用，不可直接删除');
     return false;
   }
   skins.delete(id);
@@ -558,11 +577,11 @@ export function removeSkin(id: string): boolean {
 }
 
 /**
- * 清理所有未被当前图层引用的非内置素材，释放图片显存与内存。
+ * 清理所有未被当前图层或历史快照引用的非内置素材，释放图片显存与内存。
  */
 export function clearUnusedSkins(): number {
-  const activeIds = new Set(state.layers.map((l) => l.skinId));
-  const toRemove = state.skins.filter((s) => s.origin !== 'builtin' && !activeIds.has(s.id));
+  const referencedIds = getReferencedSkinIds();
+  const toRemove = state.skins.filter((s) => s.origin !== 'builtin' && !referencedIds.has(s.id));
   if (toRemove.length === 0) {
     notify('info', '没有闲置素材需要清理');
     return 0;
@@ -1368,5 +1387,5 @@ loadPresets();
  * ------------------------------------------------------------------ */
 
 export const editor = state;
-export { BUILTIN_SKINS, SkinLookupError };
+export { BUILTIN_SKINS, SkinLookupError, registerSkin };
 export type { AvatarLayer };
