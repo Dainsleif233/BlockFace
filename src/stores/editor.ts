@@ -21,6 +21,7 @@ import { scaleSizeBy, tidyAngle } from '../core/model/gesture';
 import { clampLayerToDocument } from '../core/model/transform';
 import { createId, MIN_LAYER_SIZE, type AvatarLayer, type BaseImageMeta } from '../core/model/types';
 import { composeDocument } from '../core/render/compose';
+import { headCache } from '../core/render/headCache';
 import {
   canvasToBlob,
   copyBlobToClipboard,
@@ -526,6 +527,58 @@ export function addAvatar(): void {
 export function useExistingSkin(skinId: string): void {
   if (!skins.has(skinId)) return;
   applySkin(skinId);
+}
+
+/**
+ * 移除一张已登记的皮肤素材。
+ * 若素材正在被画布上的图层引用，则拒绝删除以防画面破损；内置皮肤不可删除。
+ */
+export function removeSkin(id: string): boolean {
+  if (id.startsWith('builtin-')) {
+    notify('warn', '内置皮肤不可删除');
+    return false;
+  }
+  const inUse = state.layers.some((l) => l.skinId === id);
+  if (inUse) {
+    notify('warn', '该素材正在被画布图层使用，请先删除对应图层或更换素材');
+    return false;
+  }
+  skins.delete(id);
+  headCache.evictSkin(id);
+  const index = state.skins.findIndex((s) => s.id === id);
+  if (index >= 0) {
+    state.skins.splice(index, 1);
+  }
+  if (state.activeSkinId === id) {
+    state.activeSkinId = state.skins[0]?.id ?? null;
+  }
+  state.skinRevision += 1;
+  notify('success', '已删除素材');
+  return true;
+}
+
+/**
+ * 清理所有未被当前图层引用的非内置素材，释放图片显存与内存。
+ */
+export function clearUnusedSkins(): number {
+  const activeIds = new Set(state.layers.map((l) => l.skinId));
+  const toRemove = state.skins.filter((s) => s.origin !== 'builtin' && !activeIds.has(s.id));
+  if (toRemove.length === 0) {
+    notify('info', '没有闲置素材需要清理');
+    return 0;
+  }
+  for (const record of toRemove) {
+    skins.delete(record.id);
+    headCache.evictSkin(record.id);
+    const index = state.skins.findIndex((s) => s.id === record.id);
+    if (index >= 0) state.skins.splice(index, 1);
+  }
+  if (!state.skins.some((s) => s.id === state.activeSkinId)) {
+    state.activeSkinId = state.skins[0]?.id ?? null;
+  }
+  state.skinRevision += 1;
+  notify('success', `已清理 ${toRemove.length} 张闲置素材`);
+  return toRemove.length;
 }
 
 export async function useBuiltinSkin(builtinId: string): Promise<void> {

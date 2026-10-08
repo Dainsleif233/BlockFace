@@ -529,6 +529,8 @@ defineExpose({ schedule });
     <div
       ref="wrap"
       class="stage__body"
+      tabindex="0"
+      aria-label="画布工作区，按方向键微调选中图层，中括号调整图层层级"
       :data-cursor="cursor"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
@@ -588,6 +590,10 @@ defineExpose({ schedule });
   overflow: hidden;
   touch-action: none;
   user-select: none;
+}
+.stage__body:focus-visible {
+  outline: 2px solid var(--bf-grass);
+  outline-offset: -2px;
 }
 
 .artboard {

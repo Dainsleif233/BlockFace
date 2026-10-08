@@ -12,6 +12,8 @@ interface Entry {
   key: string;
 }
 
+export type HeadRenderer = (skin: SkinTexture, options: { overlay: boolean; pixelSize: number }) => HTMLCanvasElement;
+
 /**
  * 头像离屏渲染缓存。
  * 拖动/缩放时每帧都要重绘文档，但头像本身只在「皮肤 / 帽子层 / 像素尺寸」变化时重算。
@@ -20,9 +22,11 @@ interface Entry {
 export class HeadCache {
   private entries = new Map<string, Entry>();
   private limit: number;
+  private renderer: HeadRenderer;
 
-  constructor(limit = 48) {
+  constructor(limit = 48, renderer: HeadRenderer = renderHeadCanvas) {
     this.limit = limit;
+    this.renderer = renderer;
   }
 
   get(skin: SkinTexture, overlay: boolean, pixelSize: number): HTMLCanvasElement {
@@ -36,13 +40,23 @@ export class HeadCache {
       return hit.canvas;
     }
 
-    const canvas = renderHeadCanvas(skin, { overlay, pixelSize: size });
+    const canvas = this.renderer(skin, { overlay, pixelSize: size });
     this.entries.set(key, { canvas, key });
     if (this.entries.size > this.limit) {
       const oldest = this.entries.keys().next().value;
       if (oldest !== undefined) this.entries.delete(oldest);
     }
     return canvas;
+  }
+
+  /** 清除特定皮肤的所有缓存条目（例如素材被删除时） */
+  evictSkin(skinId: string): void {
+    const prefix = `${skinId}|`;
+    for (const key of Array.from(this.entries.keys())) {
+      if (key.startsWith(prefix)) {
+        this.entries.delete(key);
+      }
+    }
   }
 
   clear(): void {

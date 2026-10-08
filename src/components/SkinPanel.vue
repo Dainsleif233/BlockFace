@@ -14,6 +14,8 @@ import {
   useImageFiles,
   useSkinFiles,
   useSkinUrls,
+  removeSkin,
+  clearUnusedSkins,
 } from '../stores/editor';
 import SkinThumb from './SkinThumb.vue';
 
@@ -36,6 +38,11 @@ const accountState = ref<'idle' | 'busy' | 'ok' | 'fail'>('idle');
 const accountText = ref('');
 
 const busy = computed(() => editor.busy !== null);
+
+const hasUnusedSkins = computed(() => {
+  const activeIds = new Set(editor.layers.map((l) => l.skinId));
+  return editor.skins.some((s) => s.origin !== 'builtin' && !activeIds.has(s.id));
+});
 
 function builtinRecord(id: string): (typeof editor.skins)[number] | null {
   return editor.skins.find((s) => s.id === 'builtin-' + id) ?? null;
@@ -241,10 +248,21 @@ async function onImageDrop(event: DragEvent): Promise<void> {
       <section v-if="editor.skins.length" class="bf-sblk bf-sblk--grass">
         <div class="bf-sblk-t">
           <h3>已载入</h3>
-          <span>{{ editor.skins.length }} 张</span>
+          <span class="skin-head-meta">
+            <span>{{ editor.skins.length }} 张</span>
+            <button
+              v-if="hasUnusedSkins"
+              type="button"
+              class="bf-btn bf-btn--sm bf-btn--quiet skin-clean-btn"
+              title="清理未被当前图层使用的自定义素材"
+              @click="clearUnusedSkins"
+            >
+              清理闲置
+            </button>
+          </span>
         </div>
         <ul class="rows">
-          <li v-for="record in editor.skins" :key="record.id">
+          <li v-for="record in editor.skins" :key="record.id" class="skin-item">
             <button
               type="button"
               class="bf-lay"
@@ -259,6 +277,16 @@ async function onImageDrop(event: DragEvent): Promise<void> {
               <span class="bf-lay-n">{{ record.sourceLabel }}</span>
               <span class="bf-lay-m">{{ record.meta.label }}</span>
               <i v-if="record.tainted" class="row__warn" title="该来源未开启 CORS，导出可能失败" aria-hidden="true">!</i>
+            </button>
+            <button
+              v-if="record.origin !== 'builtin'"
+              type="button"
+              class="bf-x skin-del-btn"
+              title="删除此素材"
+              :aria-label="'删除素材 ' + record.sourceLabel"
+              @click.stop="removeSkin(record.id)"
+            >
+              <i class="bf-ic bf-ic--x" aria-hidden="true" />
             </button>
           </li>
         </ul>
@@ -336,6 +364,36 @@ async function onImageDrop(event: DragEvent): Promise<void> {
 }
 
 .rows { display: flex; flex-direction: column; gap: 6px; }
+.skin-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.skin-clean-btn {
+  font-size: 11px;
+  height: 20px;
+  padding: 0 6px;
+}
+.skin-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.skin-item .bf-lay {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.skin-del-btn {
+  position: absolute;
+  right: 6px;
+  opacity: 0;
+  background: var(--bf-white);
+  transition: opacity 0.15s ease;
+}
+.skin-item:hover .skin-del-btn,
+.skin-item:focus-within .skin-del-btn {
+  opacity: 1;
+}
 .row__warn {
   margin-left: auto;
   font-style: normal;
