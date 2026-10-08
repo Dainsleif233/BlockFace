@@ -16,6 +16,7 @@ import {
   redo,
   setBaseImage,
   undo,
+  useImageFile,
   useSkinFile,
 } from './stores/editor';
 
@@ -67,6 +68,8 @@ async function handlePastedImage(file: File): Promise<void> {
     const meta = describeSkin(img.naturalWidth, img.naturalHeight);
     if (meta.valid) {
       await useSkinFile(file);
+    } else if (editor.baseImageId) {
+      await useImageFile(file);
     } else {
       await setBaseImage(file);
     }

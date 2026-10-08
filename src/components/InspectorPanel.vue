@@ -203,6 +203,7 @@ const presetRows = computed(() =>
             dataUrl: s.dataUrl,
             bgSize: 'contain',
             bgPos: 'center',
+            isCustom: true,
           };
         }
         const isLegacy = s.height === s.width / 2;
@@ -210,6 +211,7 @@ const presetRows = computed(() =>
           dataUrl: s.dataUrl,
           bgSize: isLegacy ? '800% 400%' : '800% 800%',
           bgPos: isLegacy ? '14.2857% 33.3333%' : '14.2857% 14.2857%',
+          isCustom: false,
         };
       });
     return { ...preset, faces, extra: Math.max(0, preset.layers.length - faces.length) };
@@ -307,7 +309,7 @@ async function onPresetFile(event: Event): Promise<void> {
             type="button"
             class="bf-tg"
             role="switch"
-            :aria-checked="layer.overlay"
+            :aria-checked="!isCustomImage && layer.overlay"
             :disabled="isCustomImage"
             :title="isCustomImage ? '头像图片无帽子层' : '第二层是官方贴图的一部分：Steve 这层正面是一圈不透明灰，关掉能露出完整正脸'"
             @click="patch({ overlay: !layer.overlay })"
@@ -487,6 +489,7 @@ async function onPresetFile(event: Event): Promise<void> {
                     v-for="(face, index) in preset.faces"
                     :key="index"
                     class="bf-face preset-face"
+                    :class="{ 'preset-face--smooth': face.isCustom }"
                     :style="{
                       backgroundImage: 'url(' + face.dataUrl + ')',
                       backgroundSize: face.bgSize,
@@ -617,7 +620,8 @@ async function onPresetFile(event: Event): Promise<void> {
 .preset__acts { display: inline-flex; align-items: center; gap: 6px; }
 .preset__save { width: 100%; margin: 8px 0; }
 .preset__faces { display: inline-flex; align-items: center; gap: 2px; flex: none; }
-.preset-face { width: 20px; height: 20px; image-rendering: pixelated; }
+.preset-face { width: 20px; height: 20px; image-rendering: pixelated; background-repeat: no-repeat; }
+.preset-face--smooth { image-rendering: auto; }
 .preset__extra { font: 700 var(--bf-font-size-sm) / 1 var(--bf-mono); color: var(--bf-ink2); }
 .preset__name-input {
   flex: 1 1 auto;

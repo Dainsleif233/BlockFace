@@ -289,10 +289,14 @@ export function notify(tone: Notice['tone'], message: string): void {
 
 export function addLayer(skinId: string, overrides: Partial<AvatarLayer> = {}): AvatarLayer {
   const size = overrides.size ?? defaultLayerSize();
+  const record = state.skins.find((s) => s.id === skinId);
+  const isCustom = record?.meta.isCustomImage;
+  const prefix = isCustom ? '图片' : '头像';
+  const defaultName = `${prefix} ${state.layers.length + 1}${record ? ` · ${record.sourceLabel}` : ''}`;
   const layer: AvatarLayer = {
     id: createId('layer'),
     skinId,
-    name: '',
+    name: overrides.name ?? defaultName,
     // 默认叠上第二层（帽子层）。官方 Steve 这层正面是一圈不透明灰，会把额头两行
     // 与两鬓盖成灰的（占成品 34% 面积），看着像坏图，但它就是官方原始数据，
     // 开着才是正版渲染结果；不想要的人在属性面板关掉即可。
@@ -306,10 +310,6 @@ export function addLayer(skinId: string, overrides: Partial<AvatarLayer> = {}): 
     visible: true,
     ...overrides,
   };
-  const record = state.skins.find((s) => s.id === skinId);
-  const isCustom = record?.meta.isCustomImage;
-  const prefix = isCustom ? '图片' : '头像';
-  layer.name = `${prefix} ${state.layers.length + 1}${record ? ` · ${record.sourceLabel}` : ''}`;
   state.layers.push(layer);
   state.selectedId = layer.id;
   return layer;
@@ -1048,17 +1048,30 @@ function uniquePresetName(base: string, exceptId?: string): string {
   return name;
 }
 
-/** 皮肤位图 → PNG data URI；画布被污染时返回 null */
-function skinToDataUrl(skin: SkinTexture): string | null {
+/** 皮肤位图 → PNG data URI 与实际尺寸；通用头像等比限制在 512px 内以防超出 1.5MB 限制与 LocalStorage 溢出；画布被污染时返回 null */
+function skinToDataUrl(skin: SkinTexture): { dataUrl: string; width: number; height: number } | null {
   try {
+    const isCustom = skin.meta.isCustomImage === true;
+    let w = skin.meta.width;
+    let h = skin.meta.height;
+    if (isCustom) {
+      const maxDim = 512;
+      if (w > maxDim || h > maxDim) {
+        const ratio = Math.min(maxDim / w, maxDim / h);
+        w = Math.max(1, Math.round(w * ratio));
+        h = Math.max(1, Math.round(h * ratio));
+      }
+    }
     const canvas = document.createElement('canvas');
-    canvas.width = skin.meta.width;
-    canvas.height = skin.meta.height;
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.imageSmoothingEnabled = skin.meta.isCustomImage ? true : false;
-    ctx.drawImage(skin.image, 0, 0, skin.meta.width, skin.meta.height);
-    return canvas.toDataURL('image/png');
+    ctx.imageSmoothingEnabled = isCustom;
+    if (isCustom) ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(skin.image, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL('image/png');
+    return { dataUrl, width: w, height: h };
   } catch {
     return null;
   }
@@ -1079,13 +1092,13 @@ export function saveCurrentAsPreset(): void {
   let missingSkin = 0;
   for (const layer of state.layers) {
     const skin = getSkin(layer.skinId);
-    const dataUrl = skin ? skinToDataUrl(skin) : null;
+    const encoded = skin ? skinToDataUrl(skin) : null;
     const embedded: PresetSkin | null =
-      dataUrl && skin && isSafeImageDataUrl(dataUrl)
+      encoded && skin && isSafeImageDataUrl(encoded.dataUrl)
         ? {
-            dataUrl,
-            width: skin.meta.width,
-            height: skin.meta.height,
+            dataUrl: encoded.dataUrl,
+            width: encoded.width,
+            height: encoded.height,
             ...(skin.meta.isCustomImage ? { isCustomImage: true } : {}),
           }
         : null;
@@ -1135,12 +1148,41 @@ export async function applyPreset(id: string): Promise<void> {
   try {
     // 要用的皮肤先全部解出来：中途失败就保持原样，不把画布搅成半成品
     const ready: { layer: PresetLayer; loaded: LoadedImage; isCustom: boolean }[] = [];
+    let fallbackLoaded: LoadedImage | null = null;
+    let fallbackCount = 0;
+
+    async function getFallbackSkin(): Promise<LoadedImage | null> {
+      if (fallbackLoaded) return fallbackLoaded;
+      try {
+        fallbackLoaded = await loadImage(BUILTIN_SKINS[0].url, { cors: false });
+        return fallbackLoaded;
+      } catch {
+        return null;
+      }
+    }
+
     for (const item of preset.layers) {
-      if (!item.skin) continue;
-      const loaded = await loadImage(item.skin.dataUrl, { cors: false });
-      const isCustom = item.skin.isCustomImage === true;
-      if (!isCustom && !describeSkin(loaded.width, loaded.height).valid) continue;
-      ready.push({ layer: item, loaded, isCustom });
+      let loaded: LoadedImage | null = null;
+      let isCustom = false;
+      if (item.skin) {
+        try {
+          const l = await loadImage(item.skin.dataUrl, { cors: false });
+          isCustom = item.skin.isCustomImage === true;
+          if (isCustom || describeSkin(l.width, l.height).valid) {
+            loaded = l;
+          }
+        } catch {
+          /* 走兜底 */
+        }
+      }
+      if (!loaded) {
+        loaded = await getFallbackSkin();
+        isCustom = false;
+        fallbackCount += 1;
+      }
+      if (loaded) {
+        ready.push({ layer: item, loaded, isCustom });
+      }
     }
 
     commit();
@@ -1174,10 +1216,9 @@ export async function applyPreset(id: string): Promise<void> {
     if (top) state.activeSkinId = top.skinId;
     fitView();
 
-    const skipped = preset.layers.length - ready.length;
     const parts = [`${ready.length} 个头像`, '底图未改动'];
-    if (skipped > 0) parts.push(`${skipped} 个头像的皮肤缺失`);
-    notify(skipped > 0 ? 'warn' : 'success', `已套用预设「${preset.name}」：${parts.join(' · ')}`);
+    if (fallbackCount > 0) parts.push(`${fallbackCount} 个头像皮肤缺失，已回退为内置皮肤`);
+    notify(fallbackCount > 0 ? 'warn' : 'success', `已套用预设「${preset.name}」：${parts.join(' · ')}`);
   } catch (error) {
     notify('error', `套用预设失败：${(error as Error).message}`);
   } finally {

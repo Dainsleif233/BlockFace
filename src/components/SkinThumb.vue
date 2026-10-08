@@ -1,6 +1,6 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { headCache } from '../core/render/headCache';
 import { editor, getSkin } from '../stores/editor';
 
@@ -17,7 +17,10 @@ const props = withDefaults(
 );
 
 const el = ref<HTMLCanvasElement | null>(null);
-const isCustom = ref(false);
+const isCustom = computed(() => {
+  if (editor.skinRevision < 0) return false;
+  return getSkin(props.skinId)?.meta.isCustomImage === true;
+});
 
 function draw(): void {
   const canvas = el.value;
@@ -34,7 +37,6 @@ function draw(): void {
   ctx.clearRect(0, 0, pixels, pixels);
   const currentSkin = getSkin(props.skinId);
   if (!currentSkin) return;
-  isCustom.value = currentSkin.meta.isCustomImage === true;
   const head = headCache.get(currentSkin, props.overlay, pixels);
   if (props.flipH) {
     ctx.translate(pixels, 0);

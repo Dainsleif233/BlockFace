@@ -90,6 +90,16 @@ describe('头像条目归一化', () => {
     expect(result?.skin?.width).toBe(8);
     expect(result?.skin?.height).toBe(8192);
   });
+
+  it('保留通用头像图片标记 isCustomImage', () => {
+    const custom = normalizePresetLayer(layer({ skin: { dataUrl: PNG, width: 400, height: 300, isCustomImage: true } }), 0);
+    expect(custom?.skin?.isCustomImage).toBe(true);
+    expect(custom?.skin?.width).toBe(400);
+    expect(custom?.skin?.height).toBe(300);
+
+    const normal = normalizePresetLayer(layer({ skin: { dataUrl: PNG, width: 64, height: 64 } }), 0);
+    expect(normal?.skin?.isCustomImage).toBeUndefined();
+  });
 });
 
 describe('预设 = 一张图上的全部头像', () => {
