@@ -326,11 +326,16 @@ export function duplicateLayer(id: string): void {
   const source = state.layers.find((l) => l.id === id);
   if (!source) return;
   beginChange();
+  const next = clampLayerToDocument(
+    { x: source.x + source.size * 0.2, y: source.y + source.size * 0.2, size: source.size },
+    state.document.width,
+    state.document.height,
+  );
   const copy: AvatarLayer = {
     ...source,
     id: createId('layer'),
-    x: source.x + source.size * 0.2,
-    y: source.y + source.size * 0.2,
+    x: next.x,
+    y: next.y,
     name: `${source.name} 副本`,
   };
   state.layers.push(copy);

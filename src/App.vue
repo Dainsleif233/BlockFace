@@ -12,6 +12,7 @@ import {
   canUndo,
   editor,
   fitView,
+  notify,
   redo,
   setBaseImage,
   undo,
@@ -60,7 +61,7 @@ async function handlePastedImage(file: File): Promise<void> {
     const img = new Image();
     await new Promise<void>((resolve, reject) => {
       img.onload = () => resolve();
-      img.onerror = () => reject(new Error('无法解析图片'));
+      img.onerror = () => reject(new Error('无法解析剪贴板图片'));
       img.src = url;
     });
     const meta = describeSkin(img.naturalWidth, img.naturalHeight);
@@ -69,6 +70,8 @@ async function handlePastedImage(file: File): Promise<void> {
     } else {
       await setBaseImage(file);
     }
+  } catch (error) {
+    notify('error', (error as Error).message);
   } finally {
     URL.revokeObjectURL(url);
   }
