@@ -43,3 +43,11 @@ export function suggestFilename(prefix = 'blockface', ext = 'png'): string {
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   return `${prefix}-${stamp}.${ext}`;
 }
+
+/** 将生成的图片 Blob 直接复制到剪贴板，便于粘贴进聊天工具 */
+export async function copyBlobToClipboard(blob: Blob): Promise<void> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard || typeof ClipboardItem === 'undefined') {
+    throw new Error('当前环境不支持直接复制图片到剪贴板');
+  }
+  await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+}

@@ -81,6 +81,35 @@ interface PlayerDbPlayer {
  * 因此主路径用 playerdb.co（返回 CORS `*` 且附带 textures.minecraft.net 地址），
  * 备选 mc-heads.net / minotar.net；贴图 CDN 本身带 CORS，可直接绘入画布。
  */
+function combineTimeoutSignal(
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`请求超时（${timeoutMs}ms）`));
+  }, timeoutMs);
+
+  let onAbort: (() => void) | undefined;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort(externalSignal.reason);
+    } else {
+      onAbort = () => controller.abort(externalSignal.reason);
+      externalSignal.addEventListener('abort', onAbort, { once: true });
+    }
+  }
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    if (externalSignal && onAbort) {
+      externalSignal.removeEventListener('abort', onAbort);
+    }
+  };
+
+  return { signal: controller.signal, cleanup };
+}
+
 export async function resolveAccountSkin(name: string, signal?: AbortSignal): Promise<AccountResolution> {
   const trimmed = validateAccountName(name);
   const fallback: SkinCandidate[] = [
@@ -88,9 +117,10 @@ export async function resolveAccountSkin(name: string, signal?: AbortSignal): Pr
     { url: `https://minotar.net/skin/${encodeURIComponent(trimmed)}`, provider: 'minotar.net' },
   ];
 
+  const { signal: fetchSignal, cleanup } = combineTimeoutSignal(6000, signal);
   try {
     const response = await fetch(`https://playerdb.co/api/player/minecraft/${encodeURIComponent(trimmed)}`, {
-      signal,
+      signal: fetchSignal,
       headers: { Accept: 'application/json' },
     });
     if (response.ok) {
@@ -109,7 +139,9 @@ export async function resolveAccountSkin(name: string, signal?: AbortSignal): Pr
     }
   } catch (error) {
     if (signal?.aborted) throw error;
-    // 网络异常不视为「不存在」，继续走备选服务
+    // 超时或网络异常不视为「不存在」，继续走备选服务
+  } finally {
+    cleanup();
   }
 
   return { displayName: trimmed, resolved: false, candidates: fallback };

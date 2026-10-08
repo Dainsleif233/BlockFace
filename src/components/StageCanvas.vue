@@ -21,6 +21,7 @@ import {
   fitView,
   getBaseImage,
   getSkin,
+  nudgeLayerOrder,
   nudgeSelected,
   removeLayer,
   rotateLayerBy,
@@ -430,11 +431,25 @@ function onKeyDown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
   const layer = selected.value;
+
+  if (event.key === 'Escape') {
+    selectLayer(null);
+    schedule();
+    return;
+  }
+
   if (!layer) return;
 
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault();
     removeLayer(layer.id);
+    schedule();
+    return;
+  }
+
+  if (event.key === '[' || event.key === ']') {
+    event.preventDefault();
+    nudgeLayerOrder(layer.id, event.key === ']' ? 1 : -1);
     schedule();
     return;
   }

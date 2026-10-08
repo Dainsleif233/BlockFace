@@ -6,7 +6,17 @@ import SkinPanel from './components/SkinPanel.vue';
 import StageCanvas from './components/StageCanvas.vue';
 import StatusBar from './components/StatusBar.vue';
 import TopBar from './components/TopBar.vue';
-import { canRedo, canUndo, editor, redo, setBaseImage, undo } from './stores/editor';
+import { describeSkin } from './core/skin/texture';
+import {
+  canRedo,
+  canUndo,
+  editor,
+  fitView,
+  redo,
+  setBaseImage,
+  undo,
+  useSkinFile,
+} from './stores/editor';
 
 const dragActive = ref(false);
 let toastTimer: number | undefined;
@@ -44,6 +54,45 @@ async function onDrop(event: DragEvent): Promise<void> {
   if (file && file.type.startsWith('image/')) await setBaseImage(file);
 }
 
+async function handlePastedImage(file: File): Promise<void> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('无法解析图片'));
+      img.src = url;
+    });
+    const meta = describeSkin(img.naturalWidth, img.naturalHeight);
+    if (meta.valid) {
+      await useSkinFile(file);
+    } else {
+      await setBaseImage(file);
+    }
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function onPaste(event: ClipboardEvent): Promise<void> {
+  const target = event.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+
+  const items = event.clipboardData?.items;
+  if (!items) return;
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      event.preventDefault();
+      await handlePastedImage(file);
+      break;
+    }
+  }
+}
+
 function onKey(event: KeyboardEvent): void {
   if (!event.ctrlKey && !event.metaKey) return;
   const target = event.target as HTMLElement | null;
@@ -59,6 +108,9 @@ function onKey(event: KeyboardEvent): void {
   } else if (key === 'y' && !event.shiftKey) {
     event.preventDefault();
     if (canRedo.value) redo();
+  } else if (key === '0') {
+    event.preventDefault();
+    fitView();
   }
 }
 
@@ -67,6 +119,7 @@ onMounted(() => {
   window.addEventListener('dragleave', onDragLeave);
   window.addEventListener('drop', onDrop);
   window.addEventListener('keydown', onKey);
+  window.addEventListener('paste', onPaste);
 });
 
 onBeforeUnmount(() => {
@@ -74,6 +127,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('dragleave', onDragLeave);
   window.removeEventListener('drop', onDrop);
   window.removeEventListener('keydown', onKey);
+  window.removeEventListener('paste', onPaste);
   window.clearTimeout(toastTimer);
 });
 </script>

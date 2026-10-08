@@ -4,6 +4,7 @@ import { computed, ref } from 'vue';
 import {
   canRedo,
   canUndo,
+  copyPng,
   editor,
   exportPng,
   redo,
@@ -39,6 +40,10 @@ async function onFile(event: Event): Promise<void> {
         <i class="bf-ic bf-ic--open" aria-hidden="true"><b /><b /></i>打开图片
       </button>
       <input ref="fileInput" class="bf-sr-only" type="file" accept="image/*" @change="onFile" />
+
+      <button class="bf-btn" type="button" :disabled="busy" title="复制到剪贴板" @click="copyPng">
+        <i class="bf-ic bf-ic--copy" aria-hidden="true"><b /><b /></i>复制图片
+      </button>
 
       <button class="bf-btn bf-btn--go" type="button" :disabled="busy" @click="exportPng">
         <i class="bf-ic bf-ic--out" aria-hidden="true"><b /><b /></i>导出 PNG

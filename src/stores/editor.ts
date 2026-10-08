@@ -21,7 +21,12 @@ import { scaleSizeBy, tidyAngle } from '../core/model/gesture';
 import { clampLayerToDocument } from '../core/model/transform';
 import { createId, MIN_LAYER_SIZE, type AvatarLayer, type BaseImageMeta } from '../core/model/types';
 import { composeDocument } from '../core/render/compose';
-import { canvasToBlob, downloadBlob, suggestFilename } from '../core/render/exportImage';
+import {
+  canvasToBlob,
+  copyBlobToClipboard,
+  downloadBlob,
+  suggestFilename,
+} from '../core/render/exportImage';
 import { loadImage, type LoadedImage } from '../core/sources/imageLoader';
 import {
   BUILTIN_SKINS,
@@ -157,6 +162,24 @@ function readBaseMeta(id: string): BaseImageMeta | null {
   return baseMeta.get(id) ?? null;
 }
 
+/** 清理未被当前画布或撤销/重做历史引用的底图，防止大图片长期驻留导致内存泄漏 */
+function sweepUnusedBaseImages(): void {
+  const activeIds = new Set<string>();
+  if (state.baseImageId) activeIds.add(state.baseImageId);
+  for (const snap of past) {
+    if (snap.baseImageId) activeIds.add(snap.baseImageId);
+  }
+  for (const snap of future) {
+    if (snap.baseImageId) activeIds.add(snap.baseImageId);
+  }
+  for (const id of Array.from(baseImages.keys())) {
+    if (!activeIds.has(id)) {
+      baseImages.delete(id);
+      baseMeta.delete(id);
+    }
+  }
+}
+
 /** 开始一次可撤销的改动；同一交互内重复调用只记一次 */
 export function beginChange(): void {
   if (openChange) return;
@@ -216,6 +239,7 @@ export function undo(): void {
   future.push(snapshot());
   restore(snap);
   endChange();
+  sweepUnusedBaseImages();
   touchHistory();
 }
 
@@ -225,6 +249,7 @@ export function redo(): void {
   past.push(snapshot());
   restore(snap);
   endChange();
+  sweepUnusedBaseImages();
   touchHistory();
 }
 
@@ -595,9 +620,11 @@ export async function setBaseImage(file: File): Promise<void> {
         tainted: loaded.tainted,
       };
       baseMeta.set(id, meta);
-      commit();
+      beginChange();
       state.baseImageId = id;
       state.baseImage = meta;
+      endChange();
+      sweepUnusedBaseImages();
       state.document = { width: loaded.width, height: loaded.height };
       for (const layer of state.layers) {
         const next = clampLayerToDocument(layer, state.document.width, state.document.height);
@@ -621,6 +648,7 @@ export function clearBaseImage(): void {
   state.baseImageId = null;
   state.baseImage = null;
   state.document = { ...DEFAULT_DOCUMENT };
+  sweepUnusedBaseImages();
 }
 
 /**
@@ -636,6 +664,11 @@ export function fitView(): void {
 export function setDocumentSize(width: number, height: number): void {
   commit();
   state.document = { width: Math.round(width), height: Math.round(height) };
+  for (const layer of state.layers) {
+    const next = clampLayerToDocument(layer, state.document.width, state.document.height);
+    layer.x = next.x;
+    layer.y = next.y;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -679,6 +712,19 @@ export async function exportPng(): Promise<void> {
     const blob = await canvasToBlob(canvas);
     downloadBlob(blob, suggestFilename());
     notify('success', `已导出 ${canvas.width}×${canvas.height} PNG`);
+  } catch (error) {
+    notify('error', (error as Error).message);
+  }
+}
+
+/** 一键复制合成图到剪贴板，方便直接粘贴发送 */
+export async function copyPng(): Promise<void> {
+  const canvas = composeToCanvas(false);
+  if (!canvas) return;
+  try {
+    const blob = await canvasToBlob(canvas);
+    await copyBlobToClipboard(blob);
+    notify('success', `已复制 ${canvas.width}×${canvas.height} 图像到剪贴板`);
   } catch (error) {
     notify('error', (error as Error).message);
   }
