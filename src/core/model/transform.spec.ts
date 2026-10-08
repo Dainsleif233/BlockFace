@@ -126,7 +126,7 @@ describe('手柄命中', () => {
 describe('边界约束', () => {
   it('图层不会整体移出文档', () => {
     const result = clampLayerToDocument({ x: -9999, y: 9999, size: 100 }, 800, 600);
-    expect(result.x).toBe(-75);
-    expect(result.y).toBe(675);
+    expect(result.x).toBe(-25);
+    expect(result.y).toBe(625);
   });
 });

@@ -97,11 +97,12 @@ const skinLabel = computed(() => {
 
 const sliders = computed<SliderSpec[]>(() => {
   const cur = layer.value;
+  const half = cur ? cur.size / 2 : 0;
   const margin = cur ? cur.size * 0.25 : 0;
-  const minX = cur ? Math.round(margin - cur.size) : 0;
-  const maxX = cur ? Math.round(editor.document.width + cur.size - margin) : editor.document.width;
-  const minY = cur ? Math.round(margin - cur.size) : 0;
-  const maxY = cur ? Math.round(editor.document.height + cur.size - margin) : editor.document.height;
+  const minX = cur ? Math.round(margin - half) : 0;
+  const maxX = cur ? Math.round(editor.document.width + half - margin) : editor.document.width;
+  const minY = cur ? Math.round(margin - half) : 0;
+  const maxY = cur ? Math.round(editor.document.height + half - margin) : editor.document.height;
 
   return [
     { key: 'x', label: 'X', aria: '横向位置', min: minX, max: maxX, step: 1, factor: 1 },

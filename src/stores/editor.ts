@@ -169,6 +169,14 @@ export function beginChange(): void {
 
 /** 结束当前改动，允许记录下一次 */
 export function endChange(): void {
+  if (wheelTimer) {
+    clearTimeout(wheelTimer);
+    wheelTimer = null;
+  }
+  if (nudgeTimer) {
+    clearTimeout(nudgeTimer);
+    nudgeTimer = null;
+  }
   openChange = false;
 }
 
@@ -188,6 +196,16 @@ export function beginWheelChange(): void {
   if (wheelTimer) clearTimeout(wheelTimer);
   wheelTimer = setTimeout(() => {
     wheelTimer = null;
+    endChange();
+  }, 400);
+}
+
+let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+export function beginNudgeChange(): void {
+  beginChange();
+  if (nudgeTimer) clearTimeout(nudgeTimer);
+  nudgeTimer = setTimeout(() => {
+    nudgeTimer = null;
     endChange();
   }, 400);
 }
@@ -343,7 +361,7 @@ export function rotateLayerBy(id: string, degrees: number): void {
 export function nudgeSelected(dx: number, dy: number): void {
   const layer = selectedLayer.value;
   if (!layer) return;
-  commit();
+  beginNudgeChange();
   const next = clampLayerToDocument(
     { x: layer.x + dx, y: layer.y + dy, size: layer.size },
     state.document.width,

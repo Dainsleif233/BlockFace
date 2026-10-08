@@ -21,6 +21,7 @@ import {
   fitView,
   getBaseImage,
   getSkin,
+  nudgeSelected,
   removeLayer,
   rotateLayerBy,
   scaleLayerBy,
@@ -448,15 +449,7 @@ function onKeyDown(event: KeyboardEvent): void {
   const delta = deltas[event.key];
   if (!delta) return;
   event.preventDefault();
-  beginChange();
-  const next = clampLayerToDocument(
-    { x: layer.x + delta[0], y: layer.y + delta[1], size: layer.size },
-    editor.document.width,
-    editor.document.height,
-  );
-  layer.x = next.x;
-  layer.y = next.y;
-  endChange();
+  nudgeSelected(delta[0], delta[1]);
   schedule();
 }
 

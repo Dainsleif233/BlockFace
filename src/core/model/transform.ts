@@ -149,9 +149,10 @@ export function clampLayerToDocument(
   width: number,
   height: number,
 ): { x: number; y: number } {
+  const half = layer.size / 2;
   const margin = layer.size * 0.25;
   return {
-    x: Math.min(width + layer.size - margin, Math.max(margin - layer.size, layer.x)),
-    y: Math.min(height + layer.size - margin, Math.max(margin - layer.size, layer.y)),
+    x: Math.min(width + half - margin, Math.max(margin - half, layer.x)),
+    y: Math.min(height + half - margin, Math.max(margin - half, layer.y)),
   };
 }

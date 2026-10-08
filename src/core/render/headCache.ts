@@ -15,13 +15,13 @@ interface Entry {
 /**
  * 头像离屏渲染缓存。
  * 拖动/缩放时每帧都要重绘文档，但头像本身只在「皮肤 / 帽子层 / 像素尺寸」变化时重算。
- * 缓存上限 24 张，超出按插入顺序淘汰。
+ * 缓存上限 48 张，超出按插入顺序淘汰。
  */
 export class HeadCache {
   private entries = new Map<string, Entry>();
   private limit: number;
 
-  constructor(limit = 24) {
+  constructor(limit = 48) {
     this.limit = limit;
   }
 

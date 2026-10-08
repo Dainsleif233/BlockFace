@@ -59,7 +59,7 @@ async function onFile(event: Event): Promise<void> {
       <button
         class="bf-btn bf-btn--icon"
         type="button"
-        title="重做 (Ctrl+Shift+Z)"
+        title="重做 (Ctrl+Shift+Z / Ctrl+Y)"
         aria-label="重做"
         :disabled="!canRedo"
         @click="redo"

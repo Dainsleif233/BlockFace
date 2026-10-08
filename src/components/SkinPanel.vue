@@ -1,6 +1,6 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { SkinOrigin } from '../core/skin/texture';
 import {
   applyPreset,
@@ -47,7 +47,15 @@ const presetRows = computed(() =>
     const faces = preset.layers
       .filter((layer) => layer.skin)
       .slice(0, 3)
-      .map((layer) => (layer.skin as { dataUrl: string }).dataUrl);
+      .map((layer) => {
+        const s = layer.skin as { dataUrl: string; width: number; height: number };
+        const isLegacy = s.height === s.width / 2;
+        return {
+          dataUrl: s.dataUrl,
+          bgSize: isLegacy ? '800% 400%' : '800% 800%',
+          bgPos: isLegacy ? '14.2857% 33.3333%' : '14.2857% 14.2857%',
+        };
+      });
     return { ...preset, faces, extra: Math.max(0, preset.layers.length - faces.length) };
   }),
 );
@@ -117,6 +125,10 @@ function isActive(id: string): boolean {
 
 onMounted(() => {
   void preloadBuiltins();
+});
+
+onBeforeUnmount(() => {
+  if (armedTimer) clearTimeout(armedTimer);
 });
 
 async function submitAccount(): Promise<void> {
@@ -337,7 +349,11 @@ async function onDrop(event: DragEvent): Promise<void> {
                     v-for="(face, index) in preset.faces"
                     :key="index"
                     class="bf-face preset-face"
-                    :style="{ backgroundImage: 'url(' + face + ')' }"
+                    :style="{
+                      backgroundImage: 'url(' + face.dataUrl + ')',
+                      backgroundSize: face.bgSize,
+                      backgroundPosition: face.bgPos,
+                    }"
                   />
                   <span v-if="!preset.faces.length" class="bf-face preset-face preset-face--empty" />
                   <span v-if="preset.extra" class="preset__extra">+{{ preset.extra }}</span>
@@ -452,7 +468,7 @@ async function onDrop(event: DragEvent): Promise<void> {
 .preset__acts { display: flex; align-items: center; gap: 6px; }
 .preset__save { width: 100%; margin-bottom: 8px; }
 .preset__faces { flex: none; display: flex; align-items: center; gap: 2px; }
-.preset__faces .preset-face { width: 18px; height: 18px; }
+.preset__faces .preset-face { width: 18px; height: 18px; image-rendering: pixelated; }
 .preset__extra { font: 700 var(--bf-font-size-sm) / 1 var(--bf-mono); color: var(--bf-ink2); }
 .preset__name-input {
   flex: 1 1 auto;

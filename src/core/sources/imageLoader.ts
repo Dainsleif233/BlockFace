@@ -24,6 +24,8 @@ export interface LoadOptions {
   proxyTemplate?: string | null;
   /** 是否优先使用 CORS 请求，默认 true */
   cors?: boolean;
+  /** 单次加载超时时间（毫秒），默认 15000 */
+  timeoutMs?: number;
 }
 
 /**
@@ -39,18 +41,40 @@ function applyProxy(template: string, url: string): string {
     : `${template}${encodeURIComponent(url)}`;
 }
 
-function loadOnce(url: string, cors: boolean): Promise<HTMLImageElement> {
+function loadOnce(url: string, cors: boolean, timeoutMs = 15000): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      img.onload = null;
+      img.onerror = null;
+    };
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        img.src = '';
+        reject(new Error(`加载图片超时（${timeoutMs}ms）：${url}`));
+      }, timeoutMs);
+    }
+
     if (cors) img.crossOrigin = 'anonymous';
     img.onload = () => {
+      cleanup();
       if (!img.naturalWidth || !img.naturalHeight) {
         reject(new Error('图片内容为空'));
         return;
       }
       resolve(img);
     };
-    img.onerror = () => reject(new Error(`无法加载图片：${url}`));
+    img.onerror = () => {
+      cleanup();
+      reject(new Error(`无法加载图片：${url}`));
+    };
     img.src = url;
   });
 }
@@ -67,22 +91,23 @@ export async function loadImage(rawUrl: string, options: LoadOptions = {}): Prom
   const url = normalizeTextureUrl(rawUrl.trim());
   if (!url) throw new Error('地址为空');
   const useCors = options.cors !== false;
+  const timeoutMs = options.timeoutMs ?? 15000;
 
   try {
-    const element = await loadOnce(url, useCors);
+    const element = await loadOnce(url, useCors, timeoutMs);
     return { element, width: element.naturalWidth, height: element.naturalHeight, tainted: false, url };
   } catch (primaryError) {
     if (options.proxyTemplate) {
       try {
         const proxied = applyProxy(options.proxyTemplate, url);
-        const element = await loadOnce(proxied, true);
+        const element = await loadOnce(proxied, true, timeoutMs);
         return { element, width: element.naturalWidth, height: element.naturalHeight, tainted: false, url: proxied };
       } catch {
         /* 落到下一级 */
       }
     }
     try {
-      const element = await loadOnce(url, false);
+      const element = await loadOnce(url, false, timeoutMs);
       return { element, width: element.naturalWidth, height: element.naturalHeight, tainted: true, url };
     } catch {
       throw primaryError;
