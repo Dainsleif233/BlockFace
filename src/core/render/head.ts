@@ -65,6 +65,28 @@ export function renderHeadCanvas(skin: SkinTexture, options: HeadRenderOptions):
 
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('当前浏览器不支持 Canvas 2D');
+
+  if (skin.meta.isCustomImage) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    const imgWidth = skin.meta.width;
+    const imgHeight = skin.meta.height;
+    const aspect = imgWidth / imgHeight;
+    let dw = size;
+    let dh = size;
+    let dx = 0;
+    let dy = 0;
+    if (aspect > 1) {
+      dh = size / aspect;
+      dy = (size - dh) / 2;
+    } else if (aspect < 1) {
+      dw = size * aspect;
+      dx = (size - dw) / 2;
+    }
+    ctx.drawImage(skin.image, dx, dy, dw, dh);
+    return canvas;
+  }
+
   ctx.imageSmoothingEnabled = false;
 
   drawRegion(ctx, skin, HEAD_REGIONS.front, scale, size);

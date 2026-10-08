@@ -35,7 +35,7 @@ store.saveCurrentAsPreset();
 await sleep(500);
 
 const preset = editor.presets[0];
-const exportBtn = Array.from(document.querySelectorAll('.rail--l button')).find((b) => b.textContent.trim() === '导出');
+const exportBtn = Array.from(document.querySelectorAll('.rail--r .preset__acts button')).find((b) => b.textContent.trim() === '导出');
 if (!exportBtn) return { fatal: '预设区没有找到导出按钮' };
 exportBtn.click();
 await sleep(2000);

@@ -1,19 +1,27 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import { MIN_LAYER_SIZE, type AvatarLayer } from '../core/model/types';
+import type { SkinOrigin } from '../core/skin/texture';
 import {
   addAvatar,
+  applyPreset,
   beginChange,
   centerSelected,
   duplicateLayer,
   editor,
   endChange,
+  exportPresets,
   fitSelectedToDocument,
+  getSkin,
+  importPresets,
   maxLayerSize,
   moveLayerTo,
   nudgeLayerOrder,
   removeLayer,
+  removePreset,
+  renamePreset,
+  saveCurrentAsPreset,
   selectLayer,
   updateLayer,
 } from '../stores/editor';
@@ -29,6 +37,14 @@ interface SliderSpec {
   step: number;
   factor: number;
 }
+
+const ORIGIN_COLOR: Record<SkinOrigin, string> = {
+  builtin: 'var(--bf-grass)',
+  account: 'var(--bf-gold)',
+  upload: 'var(--bf-cyan)',
+  url: 'var(--bf-red)',
+  preset: 'var(--bf-ink)',
+};
 
 /**
  * 图层列表按"看得见的顺序"排：上层在列表上方，跟画面上的遮挡关系一致。
@@ -90,9 +106,12 @@ function onRowKeydown(event: KeyboardEvent, id: string): void {
 }
 
 const layer = computed(() => editor.layers.find((l) => l.id === editor.selectedId) ?? null);
+const selectedSkin = computed(() => (layer.value ? getSkin(layer.value.skinId) : null));
+const isCustomImage = computed(() => selectedSkin.value?.meta.isCustomImage === true);
+
 const skinLabel = computed(() => {
   const record = editor.skins.find((s) => s.id === layer.value?.skinId) ?? null;
-  return record ? record.sourceLabel : '皮肤未载入';
+  return record ? record.sourceLabel : '贴图未载入';
 });
 
 const sliders = computed<SliderSpec[]>(() => {
@@ -158,99 +177,226 @@ function resetTransform(): void {
     flipH: false,
   });
 }
+
+function onNameInput(event: Event): void {
+  const target = layer.value;
+  if (!target) return;
+  const val = (event.target as HTMLInputElement).value;
+  updateLayer(target.id, { name: val }, false);
+}
+
+/* ------------------------------------------------------------------ *
+ * 预设
+ * ------------------------------------------------------------------ */
+
+const presetInput = ref<HTMLInputElement | null>(null);
+
+const presetRows = computed(() =>
+  editor.presets.map((preset) => {
+    const faces = preset.layers
+      .filter((l) => l.skin)
+      .slice(0, 3)
+      .map((l) => {
+        const s = l.skin as { dataUrl: string; width: number; height: number; isCustomImage?: boolean };
+        if (s.isCustomImage) {
+          return {
+            dataUrl: s.dataUrl,
+            bgSize: 'contain',
+            bgPos: 'center',
+          };
+        }
+        const isLegacy = s.height === s.width / 2;
+        return {
+          dataUrl: s.dataUrl,
+          bgSize: isLegacy ? '800% 400%' : '800% 800%',
+          bgPos: isLegacy ? '14.2857% 33.3333%' : '14.2857% 14.2857%',
+        };
+      });
+    return { ...preset, faces, extra: Math.max(0, preset.layers.length - faces.length) };
+  }),
+);
+
+const renamingId = ref<string | null>(null);
+const renameText = ref('');
+let renameInputEl: HTMLInputElement | null = null;
+
+function bindRenameInput(el: unknown): void {
+  renameInputEl = (el as HTMLInputElement | null) ?? null;
+}
+
+async function startRename(id: string, current: string): Promise<void> {
+  renamingId.value = id;
+  renameText.value = current;
+  await nextTick();
+  renameInputEl?.focus();
+  renameInputEl?.select();
+}
+
+function commitRename(): void {
+  if (renamingId.value) renamePreset(renamingId.value, renameText.value);
+  renamingId.value = null;
+}
+
+function cancelRename(): void {
+  renamingId.value = null;
+}
+
+const armedDeleteId = ref<string | null>(null);
+let armedTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onDeleteClick(id: string): void {
+  if (armedTimer) clearTimeout(armedTimer);
+  if (armedDeleteId.value !== id) {
+    armedDeleteId.value = id;
+    armedTimer = setTimeout(() => {
+      armedDeleteId.value = null;
+    }, 3000);
+    return;
+  }
+  armedDeleteId.value = null;
+  removePreset(id);
+}
+
+onBeforeUnmount(() => {
+  if (armedTimer) clearTimeout(armedTimer);
+});
+
+function pickPresetFile(): void {
+  presetInput.value?.click();
+}
+
+async function onPresetFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (file) await importPresets(file);
+}
 </script>
 
 <template>
   <aside class="rail rail--r">
     <div class="rail__head">
-      <h2>头像属性</h2>
+      <h2>{{ layer ? (isCustomImage ? '图片属性' : '头像属性') : '图层与预设' }}</h2>
       <span>{{ layer ? layer.name : '未选中' }}</span>
     </div>
 
-    <div v-if="layer" class="rail__body bf-scroll">
-      <div class="preview">
-        <span class="preview__face">
-          <SkinThumb :skin-id="layer.skinId" :overlay="layer.overlay" :flip-h="layer.flipH" :size="84" />
-        </span>
-        <span class="preview__meta">
-          <b>{{ layer.name }}</b>
-          <span>{{ skinLabel }}</span>
-        </span>
-      </div>
-
-      <section class="bf-sblk bf-sblk--cyan">
-        <button
-          type="button"
-          class="bf-tg"
-          role="switch"
-          :aria-checked="layer.overlay"
-          title="第二层是官方贴图的一部分：Steve 这层正面是一圈不透明灰，关掉能露出完整正脸"
-          @click="patch({ overlay: !layer.overlay })"
-        >
-          <span class="bf-tg-track" aria-hidden="true"><i class="bf-tg-knob" /></span>
-          <span class="bf-tg-t">帽子层</span>
-          <span class="bf-tg-s">{{ layer.overlay ? '开' : '关' }}</span>
-        </button>
-        <button
-          type="button"
-          class="bf-tg"
-          role="switch"
-          :aria-checked="layer.flipH"
-          @click="patch({ flipH: !layer.flipH })"
-        >
-          <span class="bf-tg-track" aria-hidden="true"><i class="bf-tg-knob" /></span>
-          <span class="bf-tg-t">水平翻转</span>
-          <span class="bf-tg-s">{{ layer.flipH ? '开' : '关' }}</span>
-        </button>
-      </section>
-
-      <section class="bf-sblk bf-sblk--gold">
-        <div class="bf-sblk-t"><h3>变换</h3><span>方向键微调</span></div>
-        <div v-for="spec in sliders" :key="spec.key" class="bf-sl">
-          <div class="bf-sl-top">
-            <span class="bf-sl-label">{{ spec.label }}</span>
+    <div class="rail__body bf-scroll">
+      <template v-if="layer">
+        <div class="preview">
+          <span class="preview__face">
+            <SkinThumb :skin-id="layer.skinId" :overlay="layer.overlay" :flip-h="layer.flipH" :size="84" />
+          </span>
+          <span class="preview__meta">
             <input
-              class="bf-sl-val"
-              type="number"
-              :min="spec.min"
-              :max="spec.max"
-              :step="spec.step"
-              :value="shown(spec)"
-              :aria-label="spec.aria"
+              :value="layer.name"
+              class="bf-inp preview__name"
+              type="text"
+              maxlength="40"
+              aria-label="图层名称"
               @focus="beginChange"
-              @input="setValue(spec, ($event.target as HTMLInputElement).value)"
-              @change="resync(spec, $event)"
-              @blur="resync(spec, $event)"
-            />
-          </div>
-          <span class="bf-sl-track">
-            <i class="bf-sl-fill" :style="{ width: percent(spec) + '%' }" />
-            <i class="bf-sl-knob" :style="{ left: percent(spec) + '%' }"><b /></i>
-            <input
-              type="range"
-              :min="spec.min"
-              :max="spec.max"
-              :step="spec.step"
-              :value="shown(spec)"
-              :aria-label="spec.aria"
-              @pointerdown="beginChange"
-              @input="setValue(spec, ($event.target as HTMLInputElement).value)"
+              @input="onNameInput"
               @change="endChange"
-              @pointerup="endChange"
+              @blur="endChange"
             />
+            <span>{{ skinLabel }}</span>
           </span>
         </div>
-      </section>
 
-      <section class="bf-sblk bf-sblk--red">
-        <div class="bf-trio">
-          <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="centerSelected">居中</button>
-          <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="fitSelectedToDocument">铺满</button>
-          <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="resetTransform">重置</button>
+        <section class="bf-sblk bf-sblk--cyan bf-duo">
+          <button
+            type="button"
+            class="bf-tg"
+            role="switch"
+            :aria-checked="layer.overlay"
+            :disabled="isCustomImage"
+            :title="isCustomImage ? '头像图片无帽子层' : '第二层是官方贴图的一部分：Steve 这层正面是一圈不透明灰，关掉能露出完整正脸'"
+            @click="patch({ overlay: !layer.overlay })"
+          >
+            <span class="bf-tg-track" aria-hidden="true"><i class="bf-tg-knob" /></span>
+            <span class="bf-tg-t">帽子层</span>
+            <span class="bf-tg-s">{{ isCustomImage ? '无' : (layer.overlay ? '开' : '关') }}</span>
+          </button>
+          <button
+            type="button"
+            class="bf-tg"
+            role="switch"
+            :aria-checked="layer.flipH"
+            @click="patch({ flipH: !layer.flipH })"
+          >
+            <span class="bf-tg-track" aria-hidden="true"><i class="bf-tg-knob" /></span>
+            <span class="bf-tg-t">水平翻转</span>
+            <span class="bf-tg-s">{{ layer.flipH ? '开' : '关' }}</span>
+          </button>
+        </section>
+
+        <section class="bf-sblk bf-sblk--gold">
+          <div class="bf-sblk-t"><h3>变换</h3><span>方向键微调</span></div>
+          <div v-for="spec in sliders" :key="spec.key" class="bf-sl">
+            <div class="bf-sl-top">
+              <span class="bf-sl-label">{{ spec.label }}</span>
+              <input
+                class="bf-sl-val"
+                type="number"
+                :min="spec.min"
+                :max="spec.max"
+                :step="spec.step"
+                :value="shown(spec)"
+                :aria-label="spec.aria"
+                @focus="beginChange"
+                @input="setValue(spec, ($event.target as HTMLInputElement).value)"
+                @change="resync(spec, $event)"
+                @blur="resync(spec, $event)"
+              />
+            </div>
+            <span class="bf-sl-track">
+              <i class="bf-sl-fill" :style="{ width: percent(spec) + '%' }" />
+              <i class="bf-sl-knob" :style="{ left: percent(spec) + '%' }"><b /></i>
+              <input
+                type="range"
+                :min="spec.min"
+                :max="spec.max"
+                :step="spec.step"
+                :value="shown(spec)"
+                :aria-label="spec.aria"
+                @pointerdown="beginChange"
+                @input="setValue(spec, ($event.target as HTMLInputElement).value)"
+                @change="endChange"
+                @pointerup="endChange"
+              />
+            </span>
+          </div>
+        </section>
+
+        <section class="bf-sblk bf-sblk--red">
+          <div class="bf-trio">
+            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="centerSelected">居中</button>
+            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="fitSelectedToDocument">铺满</button>
+            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="resetTransform">重置</button>
+          </div>
+        </section>
+
+        <section class="bf-sblk bf-sblk--red">
+          <div class="bf-duo">
+            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="duplicateLayer(layer.id)">
+              <i class="bf-ic bf-ic--copy" aria-hidden="true"><b /><b /></i>复制
+            </button>
+            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="removeLayer(layer.id)">
+              <i class="bf-ic bf-ic--del" aria-hidden="true"><b /><b /></i>删除
+            </button>
+          </div>
+        </section>
+      </template>
+
+      <template v-else>
+        <div class="empty">
+          <p class="empty__t">没有选中的图层</p>
+          <p class="bf-note">左边任选一张素材或皮肤即可放下，再点它就能选中。</p>
+          <div><button class="bf-btn bf-btn--sm bf-btn--ink" type="button" @click="addAvatar">新增头像</button></div>
         </div>
-      </section>
+      </template>
 
-      <section class="bf-sblk bf-sblk--grass">
+      <!-- 图层列表：只要画布上有图层就显示，无论当前是否选中单张 -->
+      <section v-if="editor.layers.length" class="bf-sblk bf-sblk--grass">
         <div class="bf-sblk-t">
           <h3>图层</h3>
           <span class="layers__head">
@@ -296,51 +442,102 @@ function resetTransform(): void {
         </ul>
       </section>
 
-      <section class="bf-sblk bf-sblk--red rail__tail">
-        <div class="bf-duo">
-          <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="duplicateLayer(layer.id)">
-            <i class="bf-ic bf-ic--copy" aria-hidden="true"><b /><b /></i>复制
-          </button>
-          <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="removeLayer(layer.id)">
-            <i class="bf-ic bf-ic--del" aria-hidden="true"><b /><b /></i>删除
-          </button>
+      <!-- 预设 -->
+      <section class="bf-sblk bf-sblk--grass">
+        <div class="bf-sblk-t">
+          <h3>预设</h3>
+          <span class="preset__acts">
+            <span v-if="editor.presets.length">{{ editor.presets.length }} 个</span>
+            <button
+              v-if="editor.presets.length"
+              class="bf-btn bf-btn--sm bf-btn--quiet"
+              type="button"
+              @click="exportPresets"
+            >
+              导出
+            </button>
+            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="pickPresetFile">导入</button>
+          </span>
         </div>
-      </section>
-    </div>
 
-    <div v-else class="rail__body empty">
-      <p class="empty__t">没有选中的头像</p>
-      <p class="bf-note">左边任选一张皮肤即可放下头像，再点它就能选中。</p>
-      <div><button class="bf-btn bf-btn--sm bf-btn--ink" type="button" @click="addAvatar">新增头像</button></div>
-      <div v-if="editor.layers.length" class="bf-sblk bf-sblk--grass">
-        <div class="bf-sblk-t"><h3>图层</h3><span>{{ editor.layers.length }} 个</span></div>
-        <ul
-          class="layers"
-          @pointerdown="onListPointerDown"
-          @pointermove="onListPointerMove"
-          @pointerup="onListPointerUp"
-          @pointercancel="onListPointerUp"
+        <button
+          class="bf-btn bf-btn--sm preset__save"
+          type="button"
+          :disabled="!editor.layers.length"
+          :title="editor.layers.length ? '把这张图上的全部图层存成一个预设' : '画布上还没有图层'"
+          @click="saveCurrentAsPreset"
         >
-          <li v-for="item in layerRows" :key="item.id" :data-layer-id="item.id">
-            <div class="bf-lay" :data-dragging="drag?.id === item.id">
-              <i class="bf-lay-bar" aria-hidden="true" />
-              <i class="lay__grip" aria-hidden="true" />
+          保存全部头像为预设
+        </button>
+        <input ref="presetInput" class="bf-sr-only" type="file" accept="application/json,.json" @change="onPresetFile" />
+
+        <ul v-if="editor.presets.length" class="rows">
+          <li v-for="preset in presetRows" :key="preset.id">
+            <div class="bf-lay">
+              <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR.preset }" aria-hidden="true" />
               <button
+                v-if="renamingId !== preset.id"
                 type="button"
-                class="lay__pick"
-                title="按住上下拖动可以调整前后顺序，Alt + 上下方向键也行"
-                @click="selectLayer(item.id)"
-                @keydown="onRowKeydown($event, item.id)"
+                class="row__pick"
+                :title="'套用「' + preset.name + '」：替换画布上的 ' + preset.layers.length + ' 个头像，底图不动'"
+                @click="applyPreset(preset.id)"
               >
-                <span class="bf-face">
-                  <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :flip-h="item.flipH" :size="24" />
+                <span class="preset__faces" aria-hidden="true">
+                  <span
+                    v-for="(face, index) in preset.faces"
+                    :key="index"
+                    class="bf-face preset-face"
+                    :style="{
+                      backgroundImage: 'url(' + face.dataUrl + ')',
+                      backgroundSize: face.bgSize,
+                      backgroundPosition: face.bgPos,
+                    }"
+                  />
+                  <span v-if="!preset.faces.length" class="bf-face preset-face preset-face--empty" />
+                  <span v-if="preset.extra" class="preset__extra">+{{ preset.extra }}</span>
                 </span>
-                <span class="bf-lay-n">{{ item.name }}</span>
+                <span class="bf-lay-n">{{ preset.name }}</span>
+              </button>
+              <input
+                v-else
+                :ref="bindRenameInput"
+                v-model="renameText"
+                class="preset__name-input"
+                type="text"
+                maxlength="40"
+                aria-label="预设名称"
+                @keydown.enter.prevent="commitRename"
+                @keydown.esc.prevent="cancelRename"
+                @blur="commitRename"
+              />
+              <button
+                class="bf-x bf-x--pen"
+                type="button"
+                title="重命名"
+                aria-label="重命名预设"
+                @click="startRename(preset.id, preset.name)"
+              >
+                <i class="bf-ic bf-ic--pen" aria-hidden="true" />
+              </button>
+              <button
+                class="bf-x"
+                :class="{ 'bf-x--armed': armedDeleteId === preset.id }"
+                type="button"
+                :title="armedDeleteId === preset.id ? '再点一次就删掉' : '删除预设'"
+                :aria-label="armedDeleteId === preset.id ? '确认删除预设' : '删除预设'"
+                @click="onDeleteClick(preset.id)"
+              >
+                <i class="bf-ic bf-ic--x" aria-hidden="true" />
               </button>
             </div>
           </li>
         </ul>
-      </div>
+        <p v-else class="bf-note">还没有预设。摆好头像，点上面的按钮存一组。</p>
+
+        <p class="bf-note preset__hint">
+          预设会保存在这台电脑的浏览器里，刷新不丢；换电脑或想备份，可以点上面的「导出」存成 .json 文件。
+        </p>
+      </section>
     </div>
   </aside>
 </template>
@@ -379,7 +576,6 @@ function resetTransform(): void {
   gap: var(--bf-gap);
   padding: var(--bf-pad);
 }
-.rail__tail { margin-top: auto; }
 
 .preview { display: flex; align-items: center; gap: 11px; padding-bottom: 13px; border-bottom: 1px solid var(--bf-line); }
 .preview__face {
@@ -391,8 +587,15 @@ function resetTransform(): void {
   border: 1px solid var(--bf-ink);
 }
 .preview__face::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; background: var(--bf-grass); }
-.preview__meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.preview__meta b { font: 700 var(--bf-font-size-ui) / 1 var(--bf-mono); }
+.preview__meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1 1 auto; }
+.preview__name {
+  height: 26px;
+  padding: 0 6px;
+  font: 700 var(--bf-font-size-ui) / 1 var(--bf-mono);
+  background: var(--bf-white);
+  border: 1px solid var(--bf-ink);
+  color: var(--bf-ink);
+}
 .preview__meta span { font-size: var(--bf-font-size-sm); color: var(--bf-ink2); }
 
 .layers { display: flex; flex-direction: column; gap: 6px; }
@@ -403,6 +606,29 @@ function resetTransform(): void {
 .lay__vis i { display: block; width: 8px; height: 8px; background: transparent; }
 .lay__vis[data-on="true"] i { background: var(--bf-ink); }
 
-.empty { gap: 10px; }
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .empty__t { font-size: var(--bf-font-size); font-weight: 700; }
+
+.rows { display: flex; flex-direction: column; gap: 6px; }
+.preset__acts { display: inline-flex; align-items: center; gap: 6px; }
+.preset__save { width: 100%; margin: 8px 0; }
+.preset__faces { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.preset-face { width: 20px; height: 20px; image-rendering: pixelated; }
+.preset__extra { font: 700 var(--bf-font-size-sm) / 1 var(--bf-mono); color: var(--bf-ink2); }
+.preset__name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  font: 700 var(--bf-font-size-ui) / 1 var(--bf-mono);
+  color: var(--bf-ink);
+  background: var(--bf-white);
+  border: 1px solid var(--bf-ink);
+}
+.preset__hint { margin-top: 9px; }
+.row__pick { display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0; text-align: left; }
 </style>

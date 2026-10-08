@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { assertUsableSkin, describeSkin } from './texture';
+import { assertUsableSkin, describeCustomImage, describeSkin } from './texture';
 
 describe('describeSkin', () => {
   it('识别 64×64 标准皮肤', () => {
@@ -51,5 +51,22 @@ describe('describeSkin', () => {
   ])('拒绝不合法尺寸 %i×%i', (w, h) => {
     expect(describeSkin(w, h).valid).toBe(false);
     expect(() => assertUsableSkin(describeSkin(w, h))).toThrow();
+  });
+});
+
+describe('describeCustomImage', () => {
+  it('正确识别合法尺寸的头像图片', () => {
+    const meta = describeCustomImage(800, 600);
+    expect(meta.valid).toBe(true);
+    expect(meta.isCustomImage).toBe(true);
+    expect(meta.scale).toBe(1);
+    expect(meta.label).toBe('800×600 · 头像图片');
+    expect(() => assertUsableSkin(meta)).not.toThrow();
+  });
+
+  it('拒绝非法尺寸的图片', () => {
+    const meta = describeCustomImage(0, 0);
+    expect(meta.valid).toBe(false);
+    expect(() => assertUsableSkin(meta)).toThrow();
   });
 });

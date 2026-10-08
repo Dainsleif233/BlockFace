@@ -1,22 +1,17 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type { SkinOrigin } from '../core/skin/texture';
 import {
-  applyPreset,
   BUILTIN_SKINS,
   editor,
-  exportPresets,
-  importPresets,
   MAX_BATCH,
   preloadBuiltins,
-  removePreset,
-  renamePreset,
-  saveCurrentAsPreset,
   splitBatchInput,
   useAccountSkins,
   useBuiltinSkin,
   useExistingSkin,
+  useImageFiles,
   useSkinFiles,
   useSkinUrls,
 } from '../stores/editor';
@@ -34,81 +29,13 @@ const ORIGIN_COLOR: Record<SkinOrigin, string> = {
 const accountId = ref('');
 const urlInput = ref('');
 const skinInput = ref<HTMLInputElement | null>(null);
-const presetInput = ref<HTMLInputElement | null>(null);
+const imageInput = ref<HTMLInputElement | null>(null);
 const dropActive = ref(false);
+const imageDropActive = ref(false);
 const accountState = ref<'idle' | 'busy' | 'ok' | 'fail'>('idle');
 const accountText = ref('');
 
 const busy = computed(() => editor.busy !== null);
-
-/** 预设列表：最多画三个头像缩略图，多于三个用 +N 标出来，一眼能认出是哪一组 */
-const presetRows = computed(() =>
-  editor.presets.map((preset) => {
-    const faces = preset.layers
-      .filter((layer) => layer.skin)
-      .slice(0, 3)
-      .map((layer) => {
-        const s = layer.skin as { dataUrl: string; width: number; height: number };
-        const isLegacy = s.height === s.width / 2;
-        return {
-          dataUrl: s.dataUrl,
-          bgSize: isLegacy ? '800% 400%' : '800% 800%',
-          bgPos: isLegacy ? '14.2857% 33.3333%' : '14.2857% 14.2857%',
-        };
-      });
-    return { ...preset, faces, extra: Math.max(0, preset.layers.length - faces.length) };
-  }),
-);
-
-/** 改名：点铅笔就地编辑，回车提交、Esc 取消、失焦也算提交 */
-const renamingId = ref<string | null>(null);
-const renameText = ref('');
-/**
- * 这个输入框在 v-for 里，模板 ref 会变成数组、focus() 静默失效（点了铅笔却打不了字），
- * 所以用函数式 ref 只记住当前正在改名的那一个。
- */
-let renameInputEl: HTMLInputElement | null = null;
-
-function bindRenameInput(el: unknown): void {
-  renameInputEl = (el as HTMLInputElement | null) ?? null;
-}
-
-async function startRename(id: string, current: string): Promise<void> {
-  renamingId.value = id;
-  renameText.value = current;
-  await nextTick();
-  renameInputEl?.focus();
-  renameInputEl?.select();
-}
-
-function commitRename(): void {
-  if (renamingId.value) renamePreset(renamingId.value, renameText.value);
-  renamingId.value = null;
-}
-
-function cancelRename(): void {
-  renamingId.value = null;
-}
-
-/**
- * 删除要点两下：预设不在撤销历史里（历史只快照文档），误点一次不该就永久没了。
- * 第一下把按钮变成"再点一次就删掉"，3 秒没动作自动收回。
- */
-const armedDeleteId = ref<string | null>(null);
-let armedTimer: ReturnType<typeof setTimeout> | null = null;
-
-function onDeleteClick(id: string): void {
-  if (armedTimer) clearTimeout(armedTimer);
-  if (armedDeleteId.value !== id) {
-    armedDeleteId.value = id;
-    armedTimer = setTimeout(() => {
-      armedDeleteId.value = null;
-    }, 3000);
-    return;
-  }
-  armedDeleteId.value = null;
-  removePreset(id);
-}
 
 function builtinRecord(id: string): (typeof editor.skins)[number] | null {
   return editor.skins.find((s) => s.id === 'builtin-' + id) ?? null;
@@ -125,10 +52,6 @@ function isActive(id: string): boolean {
 
 onMounted(() => {
   void preloadBuiltins();
-});
-
-onBeforeUnmount(() => {
-  if (armedTimer) clearTimeout(armedTimer);
 });
 
 async function submitAccount(): Promise<void> {
@@ -157,8 +80,8 @@ function pickSkin(): void {
   skinInput.value?.click();
 }
 
-function pickPresetFile(): void {
-  presetInput.value?.click();
+function pickImage(): void {
+  imageInput.value?.click();
 }
 
 async function onSkinFile(event: Event): Promise<void> {
@@ -168,11 +91,11 @@ async function onSkinFile(event: Event): Promise<void> {
   if (files.length) await useSkinFiles(files);
 }
 
-async function onPresetFile(event: Event): Promise<void> {
+async function onImageFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
+  const files = Array.from(input.files ?? []);
   input.value = '';
-  if (file) await importPresets(file);
+  if (files.length) await useImageFiles(files);
 }
 
 async function onDrop(event: DragEvent): Promise<void> {
@@ -180,12 +103,18 @@ async function onDrop(event: DragEvent): Promise<void> {
   const files = Array.from(event.dataTransfer?.files ?? []);
   if (files.length) await useSkinFiles(files);
 }
+
+async function onImageDrop(event: DragEvent): Promise<void> {
+  imageDropActive.value = false;
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  if (files.length) await useImageFiles(files);
+}
 </script>
 
 <template>
   <aside class="rail rail--l">
     <div class="rail__head">
-      <h2>皮肤来源</h2>
+      <h2>素材与皮肤</h2>
     </div>
 
     <div class="rail__body bf-scroll">
@@ -200,7 +129,6 @@ async function onDrop(event: DragEvent): Promise<void> {
             :aria-pressed="isActive(builtin.id)"
             @click="useBuiltinSkin(builtin.id)"
           >
-            <span v-if="isActive(builtin.id)" class="bf-card-flag">使用中</span>
             <SkinThumb :skin-id="'builtin-' + builtin.id" :size="56" />
             <span class="bf-card-n">{{ builtin.name }}</span>
             <span class="bf-card-s">{{ builtinSize(builtin.id) }}</span>
@@ -250,155 +178,90 @@ async function onDrop(event: DragEvent): Promise<void> {
           @click="pickSkin"
           @keydown.enter.prevent="pickSkin"
           @dragover.stop.prevent="dropActive = true"
-          @dragleave.stop="dropActive = false"
+          @dragleave.stop.prevent="dropActive = false"
           @drop.stop.prevent="onDrop"
         >
-          <i class="bf-ic bf-ic--file" aria-hidden="true"><b /><b /></i>
-          <span class="bf-drop-t">拖入或点击选择</span>
-          <span class="bf-drop-s">64×64 · 64×32 · 128 以上高清</span>
+          <i class="bf-drop-ico" aria-hidden="true">
+            <b class="bf-drop-ico__arr" />
+            <b class="bf-drop-ico__bar" />
+          </i>
+          <p class="bf-drop-t">点击选择文件，或拖到这里</p>
+          <p class="bf-drop-st">需为标准 PNG 皮肤贴图</p>
         </div>
-        <input
-          ref="skinInput"
-          class="bf-sr-only"
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          multiple
-          @change="onSkinFile"
-        />
+        <input ref="skinInput" class="bf-sr-only" type="file" accept="image/png" multiple tabindex="-1" @change="onSkinFile" />
       </section>
 
       <section class="bf-sblk bf-sblk--red">
-        <div class="bf-sblk-t" title="一次填多个地址（空格或换行隔开）会各加一个头像">
-          <h3>皮肤 URL</h3>
+        <div
+          class="bf-sblk-t"
+          :title="'一次填多个地址（空格或换行隔开）会各加一个头像，最多 ' + MAX_BATCH + ' 个'"
+        >
+          <h3>网络地址</h3>
           <span>多个各加一个</span>
         </div>
         <form class="bf-row" @submit.prevent="submitUrl">
           <input
             v-model="urlInput"
             class="bf-inp"
-            type="text"
-            placeholder="粘贴图片直链"
-            aria-label="皮肤 URL"
+            type="url"
+            placeholder="https://… 贴图直链"
+            aria-label="皮肤贴图网络地址"
             :disabled="busy"
           />
-          <button class="bf-btn bf-btn--sm" type="submit" :disabled="busy || !urlInput.trim()">加载</button>
+          <button class="bf-btn bf-btn--sm bf-btn--ink" type="submit" :disabled="busy || !urlInput.trim()">载入</button>
         </form>
       </section>
 
+      <section class="bf-sblk bf-sblk--cyan">
+        <div class="bf-sblk-t" title="按住 Ctrl/Cmd 多选，或一次拖入多张，直接作为头像贴图使用，无需符合皮肤规格">
+          <h3>上传头像图片</h3>
+          <span>可多选</span>
+        </div>
+        <div
+          class="bf-drop"
+          role="button"
+          tabindex="0"
+          :data-active="imageDropActive"
+          @click="pickImage"
+          @keydown.enter.prevent="pickImage"
+          @dragover.stop.prevent="imageDropActive = true"
+          @dragleave.stop.prevent="imageDropActive = false"
+          @drop.stop.prevent="onImageDrop"
+        >
+          <i class="bf-drop-ico" aria-hidden="true">
+            <b class="bf-drop-ico__arr" />
+            <b class="bf-drop-ico__bar" />
+          </i>
+          <p class="bf-drop-t">点击选择图片，或拖到这里</p>
+          <p class="bf-drop-st">支持 PNG / JPG / WebP 等头像图片</p>
+        </div>
+        <input ref="imageInput" class="bf-sr-only" type="file" accept="image/*" multiple tabindex="-1" @change="onImageFile" />
+      </section>
+
       <section v-if="editor.skins.length" class="bf-sblk bf-sblk--grass">
-        <div class="bf-sblk-t"><h3>已载入</h3><span>{{ editor.skins.length }} 张</span></div>
+        <div class="bf-sblk-t">
+          <h3>已载入</h3>
+          <span>{{ editor.skins.length }} 张</span>
+        </div>
         <ul class="rows">
           <li v-for="record in editor.skins" :key="record.id">
             <button
               type="button"
-              class="bf-lay row"
-              :aria-current="record.id === editor.activeSkinId"
+              class="bf-lay"
+              :data-selected="editor.activeSkinId === record.id"
+              :title="record.sourceLabel + ' · ' + record.meta.label + '（' + record.provider + '）'"
               @click="useExistingSkin(record.id)"
             >
-              <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR[record.origin] }" aria-hidden="true" />
-              <span class="bf-face"><SkinThumb :skin-id="record.id" :size="24" /></span>
+              <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR[record.origin] || 'var(--bf-ink)' }" aria-hidden="true" />
+              <span class="bf-face">
+                <SkinThumb :skin-id="record.id" :overlay="true" :size="24" />
+              </span>
               <span class="bf-lay-n">{{ record.sourceLabel }}</span>
               <span class="bf-lay-m">{{ record.meta.label }}</span>
               <i v-if="record.tainted" class="row__warn" title="该来源未开启 CORS，导出可能失败" aria-hidden="true">!</i>
             </button>
           </li>
         </ul>
-      </section>
-
-      <section class="bf-sblk bf-sblk--grass rail__tail">
-        <div class="bf-sblk-t">
-          <h3>预设</h3>
-          <span class="preset__acts">
-            <span v-if="editor.presets.length">{{ editor.presets.length }} 个</span>
-            <button
-              v-if="editor.presets.length"
-              class="bf-btn bf-btn--sm bf-btn--quiet"
-              type="button"
-              @click="exportPresets"
-            >
-              导出
-            </button>
-            <button class="bf-btn bf-btn--sm bf-btn--quiet" type="button" @click="pickPresetFile">导入</button>
-          </span>
-        </div>
-
-        <button
-          class="bf-btn bf-btn--sm preset__save"
-          type="button"
-          :disabled="!editor.layers.length"
-          :title="editor.layers.length ? '把这张图上的全部头像存成一个预设' : '画布上还没有头像'"
-          @click="saveCurrentAsPreset"
-        >
-          保存全部头像为预设
-        </button>
-        <input ref="presetInput" class="bf-sr-only" type="file" accept="application/json,.json" @change="onPresetFile" />
-
-        <ul v-if="editor.presets.length" class="rows">
-          <li v-for="preset in presetRows" :key="preset.id">
-            <div class="bf-lay">
-              <i class="bf-lay-bar" :style="{ background: ORIGIN_COLOR.preset }" aria-hidden="true" />
-              <button
-                v-if="renamingId !== preset.id"
-                type="button"
-                class="row__pick"
-                :title="'套用「' + preset.name + '」：替换画布上的 ' + preset.layers.length + ' 个头像，底图不动'"
-                @click="applyPreset(preset.id)"
-              >
-                <span class="preset__faces" aria-hidden="true">
-                  <span
-                    v-for="(face, index) in preset.faces"
-                    :key="index"
-                    class="bf-face preset-face"
-                    :style="{
-                      backgroundImage: 'url(' + face.dataUrl + ')',
-                      backgroundSize: face.bgSize,
-                      backgroundPosition: face.bgPos,
-                    }"
-                  />
-                  <span v-if="!preset.faces.length" class="bf-face preset-face preset-face--empty" />
-                  <span v-if="preset.extra" class="preset__extra">+{{ preset.extra }}</span>
-                </span>
-                <span class="bf-lay-n">{{ preset.name }}</span>
-              </button>
-              <input
-                v-else
-                :ref="bindRenameInput"
-                v-model="renameText"
-                class="preset__name-input"
-                type="text"
-                maxlength="40"
-                aria-label="预设名称"
-                @keydown.enter.prevent="commitRename"
-                @keydown.esc.prevent="cancelRename"
-                @blur="commitRename"
-              />
-              <button
-                class="bf-x bf-x--pen"
-                type="button"
-                title="重命名"
-                aria-label="重命名预设"
-                @click="startRename(preset.id, preset.name)"
-              >
-                <i class="bf-ic bf-ic--pen" aria-hidden="true" />
-              </button>
-              <button
-                class="bf-x"
-                :class="{ 'bf-x--armed': armedDeleteId === preset.id }"
-                type="button"
-                :title="armedDeleteId === preset.id ? '再点一次就删掉' : '删除预设'"
-                :aria-label="armedDeleteId === preset.id ? '确认删除预设' : '删除预设'"
-                @click="onDeleteClick(preset.id)"
-              >
-                <i class="bf-ic bf-ic--x" aria-hidden="true" />
-              </button>
-            </div>
-          </li>
-        </ul>
-        <p v-else class="bf-note">还没有预设。摆好头像，点上面的按钮存一组。</p>
-
-        <p class="bf-note preset__hint">
-          预设 = 这张图上<strong>全部头像</strong>的摆法；套用只换头像，<strong>底图不动</strong>。
-        </p>
       </section>
     </div>
   </aside>
@@ -421,8 +284,6 @@ async function onDrop(event: DragEvent): Promise<void> {
   height: var(--bf-railhead);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   padding: 0 14px;
   background: var(--bf-white);
   border-bottom: 1px solid var(--bf-ink);
@@ -437,49 +298,48 @@ async function onDrop(event: DragEvent): Promise<void> {
   gap: var(--bf-gap);
   padding: var(--bf-pad);
 }
-.rail__tail { margin-top: auto; }
 
-.card { height: 128px; }
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px 8px;
+}
+.card:active { transform: translate(1px, 1px); }
+.card[aria-pressed="true"] {
+  border-color: var(--bf-ink);
+}
+.bf-card-n { font-weight: 700; color: var(--bf-ink); }
+.bf-card-s { font: 700 var(--bf-font-size-sm) / 1 var(--bf-mono); color: var(--bf-ink2); }
 
-.qstat { display: flex; align-items: center; gap: 6px; margin-top: 9px; font-size: var(--bf-font-size-sm); color: var(--bf-ink2); }
-.qdot { width: 7px; height: 7px; background: var(--bf-gold); animation: qstep 1.2s steps(1, end) infinite; }
-.qdot:nth-child(2) { animation-delay: 0.4s; }
-.qdot:nth-child(3) { animation-delay: 0.8s; }
-@keyframes qstep {
-  0% { opacity: 1; }
-  45% { opacity: 0.2; }
-  100% { opacity: 1; }
+.qstat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--bf-font-size-sm);
+  color: var(--bf-ink2);
+}
+.qdot {
+  width: 4px;
+  height: 4px;
+  background: var(--bf-gold);
+  animation: qblink 1.2s infinite ease-in-out both;
+}
+.qdot:nth-child(2) { animation-delay: 0.2s; }
+.qdot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes qblink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
 }
 
 .rows { display: flex; flex-direction: column; gap: 6px; }
-.row { width: 100%; text-align: left; }
-.row:hover { border-color: var(--bf-ink); }
 .row__warn {
-  flex: none;
-  width: 16px; height: 16px;
-  display: grid; place-items: center;
-  background: var(--bf-gold);
-  color: var(--bf-ink);
-  font-size: var(--bf-font-size-sm);
-  font-weight: 700;
+  margin-left: auto;
   font-style: normal;
+  font-weight: 700;
+  color: var(--bf-gold);
 }
-
-.preset__acts { display: flex; align-items: center; gap: 6px; }
-.preset__save { width: 100%; margin-bottom: 8px; }
-.preset__faces { flex: none; display: flex; align-items: center; gap: 2px; }
-.preset__faces .preset-face { width: 18px; height: 18px; image-rendering: pixelated; }
-.preset__extra { font: 700 var(--bf-font-size-sm) / 1 var(--bf-mono); color: var(--bf-ink2); }
-.preset__name-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 24px;
-  padding: 0 6px;
-  font: 700 var(--bf-font-size-ui) / 1 var(--bf-mono);
-  color: var(--bf-ink);
-  background: var(--bf-white);
-  border: 1px solid var(--bf-ink);
-}
-.preset__hint { margin-top: 9px; }
-.row__pick { display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0; text-align: left; }
 </style>

@@ -33,6 +33,7 @@ export interface PresetSkin {
   dataUrl: string;
   width: number;
   height: number;
+  isCustomImage?: boolean;
 }
 
 export interface PresetLayer {
@@ -96,10 +97,12 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 function normalizeSkin(raw: unknown): PresetSkin | null {
   const record = isRecord(raw) ? raw : null;
   if (!record || !isSafeImageDataUrl(record.dataUrl)) return null;
+  const isCustomImage = record.isCustomImage === true;
   return {
     dataUrl: record.dataUrl,
     width: Math.round(clampNumber(record.width, 8, 8192, 64)),
     height: Math.round(clampNumber(record.height, 8, 8192, 64)),
+    ...(isCustomImage ? { isCustomImage: true } : {}),
   };
 }
 

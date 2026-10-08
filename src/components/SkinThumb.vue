@@ -17,6 +17,7 @@ const props = withDefaults(
 );
 
 const el = ref<HTMLCanvasElement | null>(null);
+const isCustom = ref(false);
 
 function draw(): void {
   const canvas = el.value;
@@ -31,9 +32,10 @@ function draw(): void {
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, pixels, pixels);
-  const skin = getSkin(props.skinId);
-  if (!skin) return;
-  const head = headCache.get(skin, props.overlay, pixels);
+  const currentSkin = getSkin(props.skinId);
+  if (!currentSkin) return;
+  isCustom.value = currentSkin.meta.isCustomImage === true;
+  const head = headCache.get(currentSkin, props.overlay, pixels);
   if (props.flipH) {
     ctx.translate(pixels, 0);
     ctx.scale(-1, 1);
@@ -48,12 +50,15 @@ defineExpose({ draw });
 </script>
 
 <template>
-  <canvas ref="el" class="skin-thumb" aria-hidden="true" />
+  <canvas ref="el" class="skin-thumb" :class="{ 'skin-thumb--smooth': isCustom }" aria-hidden="true" />
 </template>
 
 <style scoped>
 .skin-thumb {
   display: block;
   image-rendering: pixelated;
+}
+.skin-thumb--smooth {
+  image-rendering: auto;
 }
 </style>

@@ -35,7 +35,7 @@ import {
   SkinLookupError,
   type SkinCandidate,
 } from '../core/sources/providers';
-import { assertUsableSkin, describeSkin, type SkinOrigin, type SkinTexture } from '../core/skin/texture';
+import { assertUsableSkin, describeCustomImage, describeSkin, type SkinOrigin, type SkinTexture } from '../core/skin/texture';
 
 /* ------------------------------------------------------------------ *
  * 非响应式资源登记处
@@ -307,7 +307,9 @@ export function addLayer(skinId: string, overrides: Partial<AvatarLayer> = {}): 
     ...overrides,
   };
   const record = state.skins.find((s) => s.id === skinId);
-  layer.name = `头像 ${state.layers.length + 1}${record ? ` · ${record.sourceLabel}` : ''}`;
+  const isCustom = record?.meta.isCustomImage;
+  const prefix = isCustom ? '图片' : '头像';
+  layer.name = `${prefix} ${state.layers.length + 1}${record ? ` · ${record.sourceLabel}` : ''}`;
   state.layers.push(layer);
   state.selectedId = layer.id;
   return layer;
@@ -435,9 +437,14 @@ function registerSkin(
   provider: string,
   id?: string,
   activate = true,
+  isCustomImage = false,
 ): SkinTexture {
-  const meta = describeSkin(loaded.width, loaded.height);
-  assertUsableSkin(meta);
+  const meta = isCustomImage
+    ? describeCustomImage(loaded.width, loaded.height)
+    : describeSkin(loaded.width, loaded.height);
+  if (!isCustomImage) {
+    assertUsableSkin(meta);
+  }
   const skinId = id ?? createId('skin');
   const texture: SkinTexture = {
     id: skinId,
@@ -485,12 +492,14 @@ async function loadCandidate(candidate: SkinCandidate): Promise<LoadedImage> {
  */
 function applySkin(skinId: string): void {
   const layer = selectedLayer.value;
+  const record = state.skins.find((s) => s.id === skinId);
+  const isCustom = record?.meta.isCustomImage;
+  const prefix = isCustom ? '图片' : '头像';
   if (layer) {
     commit();
     layer.skinId = skinId;
-    const record = state.skins.find((s) => s.id === skinId);
-    if (record) layer.name = `头像 · ${record.sourceLabel}`;
-    notify('success', `已应用到选中的头像`);
+    if (record) layer.name = `${prefix} · ${record.sourceLabel}`;
+    notify('success', `已应用到选中的${prefix}`);
   } else {
     commit();
     addLayer(skinId);
@@ -558,6 +567,34 @@ export async function useAccountSkin(name: string): Promise<void> {
 
 function isSkinFile(file: File): boolean {
   return file.type === 'image/png' || /\.png$/i.test(file.name);
+}
+
+export function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg|avif)$/i.test(file.name);
+}
+
+export async function useImageFile(file: File): Promise<void> {
+  if (!isImageFile(file)) {
+    notify('error', '请选择图片文件（PNG / JPG / WebP 等）');
+    return;
+  }
+  state.busy = `读取 ${file.name}`;
+  try {
+    const url = URL.createObjectURL(file);
+    try {
+      const loaded = await loadImage(url, { cors: false });
+      const skinId = createId('skin');
+      registerSkin(loaded, 'upload', file.name.replace(/\.[^.]+$/, ''), '本地图片', skinId, true, true);
+      applySkin(skinId);
+      notify('success', `已载入图片 ${file.name}`);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  } catch (error) {
+    notify('error', (error as Error).message);
+  } finally {
+    state.busy = null;
+  }
 }
 
 export async function useSkinFile(file: File): Promise<void> {
@@ -788,18 +825,19 @@ interface BatchItem {
   /** 失败时用来指认是谁 */
   label: string;
   origin: SkinOrigin;
+  isCustomImage?: boolean;
   load: () => Promise<{ loaded: LoadedImage; provider: string; label: string }>;
 }
 
 /** 逐个加载，成功的各占一层；整批只收一条历史，撤销一次就整批退回 */
 async function batchAdd(items: BatchItem[], what: string): Promise<BatchResult> {
-  const ready: { loaded: LoadedImage; provider: string; label: string; origin: SkinOrigin }[] = [];
+  const ready: { loaded: LoadedImage; provider: string; label: string; origin: SkinOrigin; isCustomImage?: boolean }[] = [];
   const failed: string[] = [];
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     state.busy = `批量${what} ${index + 1}/${items.length}`;
     try {
-      ready.push({ ...(await item.load()), origin: item.origin });
+      ready.push({ ...(await item.load()), origin: item.origin, isCustomImage: item.isCustomImage });
     } catch {
       failed.push(shortLabel(item.label));
     }
@@ -815,7 +853,7 @@ async function batchAdd(items: BatchItem[], what: string): Promise<BatchResult> 
   const slots = gridSlots(ready.length);
   ready.forEach((entry, index) => {
     const skinId = createId('skin');
-    registerSkin(entry.loaded, entry.origin, entry.label, entry.provider, skinId, false);
+    registerSkin(entry.loaded, entry.origin, entry.label, entry.provider, skinId, false, entry.isCustomImage);
     addLayer(skinId, slots[index]);
     state.activeSkinId = skinId;
   });
@@ -881,6 +919,37 @@ export async function useSkinFiles(files: File[]): Promise<BatchResult> {
       },
     })),
     '读取皮肤',
+  );
+}
+
+/** 头像图片文件：一张走老路，多张各新增一个 */
+export async function useImageFiles(files: File[]): Promise<BatchResult> {
+  const usable = files.filter((file) => isImageFile(file));
+  if (usable.length === 0) {
+    notify('error', '请选择有效的图片文件（PNG / JPG / WebP 等）');
+    return { ok: 0, failed: [] };
+  }
+  if (usable.length === 1) {
+    const before = state.skins.length;
+    await useImageFile(usable[0]);
+    return state.skins.length > before ? { ok: 1, failed: [] } : { ok: 0, failed: [usable[0].name] };
+  }
+  return batchAdd(
+    usable.map((file): BatchItem => ({
+      label: file.name,
+      origin: 'upload',
+      isCustomImage: true,
+      load: async () => {
+        const url = URL.createObjectURL(file);
+        try {
+          const loaded = await loadImage(url, { cors: false });
+          return { loaded, provider: '本地图片', label: file.name.replace(/\.[^.]+$/, '') };
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      },
+    })),
+    '读取图片',
   );
 }
 
@@ -987,7 +1056,7 @@ function skinToDataUrl(skin: SkinTexture): string | null {
     canvas.height = skin.meta.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = skin.meta.isCustomImage ? true : false;
     ctx.drawImage(skin.image, 0, 0, skin.meta.width, skin.meta.height);
     return canvas.toDataURL('image/png');
   } catch {
@@ -1013,7 +1082,12 @@ export function saveCurrentAsPreset(): void {
     const dataUrl = skin ? skinToDataUrl(skin) : null;
     const embedded: PresetSkin | null =
       dataUrl && skin && isSafeImageDataUrl(dataUrl)
-        ? { dataUrl, width: skin.meta.width, height: skin.meta.height }
+        ? {
+            dataUrl,
+            width: skin.meta.width,
+            height: skin.meta.height,
+            ...(skin.meta.isCustomImage ? { isCustomImage: true } : {}),
+          }
         : null;
     if (!embedded) missingSkin += 1;
     layers.push({
@@ -1060,12 +1134,13 @@ export async function applyPreset(id: string): Promise<void> {
   state.busy = `载入预设 ${preset.name}`;
   try {
     // 要用的皮肤先全部解出来：中途失败就保持原样，不把画布搅成半成品
-    const ready: { layer: PresetLayer; loaded: LoadedImage }[] = [];
+    const ready: { layer: PresetLayer; loaded: LoadedImage; isCustom: boolean }[] = [];
     for (const item of preset.layers) {
       if (!item.skin) continue;
       const loaded = await loadImage(item.skin.dataUrl, { cors: false });
-      if (!describeSkin(loaded.width, loaded.height).valid) continue;
-      ready.push({ layer: item, loaded });
+      const isCustom = item.skin.isCustomImage === true;
+      if (!isCustom && !describeSkin(loaded.width, loaded.height).valid) continue;
+      ready.push({ layer: item, loaded, isCustom });
     }
 
     commit();
@@ -1073,7 +1148,7 @@ export async function applyPreset(id: string): Promise<void> {
     state.layers.length = 0;
     for (const item of ready) {
       const skinId = createId('skin');
-      registerSkin(item.loaded, 'preset', preset.name, '预设', skinId);
+      registerSkin(item.loaded, 'preset', preset.name, '预设', skinId, false, item.isCustom);
       const size = clampSize(item.layer.size);
       const placed = clampLayerToDocument(
         { x: item.layer.x, y: item.layer.y, size },

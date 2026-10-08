@@ -26,6 +26,8 @@ export interface SkinMeta {
   valid: boolean;
   /** 中文规格标签，直接用于界面展示 */
   label: string;
+  /** 是否为普通图片（非 Minecraft 皮肤贴图，无需 UV 切割正面与帽子） */
+  isCustomImage?: boolean;
 }
 
 const LEGACY_LABEL = '旧版格式';
@@ -69,10 +71,23 @@ export interface SkinTexture {
   tainted: boolean;
 }
 
+export function describeCustomImage(width: number, height: number): SkinMeta {
+  const valid = width > 0 && height > 0;
+  return {
+    width,
+    height,
+    scale: 1,
+    legacy: false,
+    valid,
+    label: valid ? `${width}×${height} · 头像图片` : '图片尺寸无效',
+    isCustomImage: true,
+  };
+}
+
 export function assertUsableSkin(meta: SkinMeta): void {
   if (!meta.valid) {
     throw new Error(
-      `皮肤尺寸 ${meta.width}×${meta.height} 不被支持。请使用 64×64、64×32，或 128/256/512 的高清皮肤。`,
+      `皮肤尺寸 ${meta.width}×${meta.height} 不被支持。请使用 64×64、64×32，或 128/256/512 的高清皮肤。如需直接贴上，请使用「上传头像图片」。`,
     );
   }
 }
