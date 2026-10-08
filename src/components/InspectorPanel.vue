@@ -170,7 +170,7 @@ function resetTransform(): void {
     <div v-if="layer" class="rail__body bf-scroll">
       <div class="preview">
         <span class="preview__face">
-          <SkinThumb :skin-id="layer.skinId" :overlay="layer.overlay" :size="84" />
+          <SkinThumb :skin-id="layer.skinId" :overlay="layer.overlay" :flip-h="layer.flipH" :size="84" />
         </span>
         <span class="preview__meta">
           <b>{{ layer.name }}</b>
@@ -277,7 +277,7 @@ function resetTransform(): void {
                 @keydown="onRowKeydown($event, item.id)"
               >
                 <span class="bf-face">
-                  <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :size="24" />
+                  <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :flip-h="item.flipH" :size="24" />
                 </span>
                 <span class="bf-lay-n">{{ item.name }}</span>
               </button>
@@ -333,7 +333,7 @@ function resetTransform(): void {
                 @keydown="onRowKeydown($event, item.id)"
               >
                 <span class="bf-face">
-                  <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :size="24" />
+                  <SkinThumb :skin-id="item.skinId" :overlay="item.overlay" :flip-h="item.flipH" :size="24" />
                 </span>
                 <span class="bf-lay-n">{{ item.name }}</span>
               </button>

@@ -162,6 +162,42 @@ await sleep(300);
 const hatOff = sampleBbox(0.5, 0.07);
 check('关掉帽子层后额头恢复暖色皮肤/头发', hatOff[0] > hatOff[2] + 20, JSON.stringify(hatOff));
 
+// ============ 5b. 水平翻转开关 ============
+const previewCanvas = document.querySelector('.preview__face canvas');
+store.updateLayer(layer.id, { flipH: false });
+await sleep(200);
+const pCtx = previewCanvas.getContext('2d');
+const pw = previewCanvas.width;
+const ph = previewCanvas.height;
+const normalImg = Array.from(pCtx.getImageData(0, 0, pw, ph).data);
+
+store.updateLayer(layer.id, { flipH: true });
+await sleep(200);
+const flippedImg = Array.from(pCtx.getImageData(0, 0, pw, ph).data);
+
+let isMirrored = true;
+for (let y = 0; y < ph; y += 1) {
+  for (let x = 0; x < pw; x += 1) {
+    const srcIdx = (y * pw + x) * 4;
+    const dstIdx = (y * pw + (pw - 1 - x)) * 4;
+    if (
+      normalImg[srcIdx] !== flippedImg[dstIdx] ||
+      normalImg[srcIdx + 1] !== flippedImg[dstIdx + 1] ||
+      normalImg[srcIdx + 2] !== flippedImg[dstIdx + 2] ||
+      normalImg[srcIdx + 3] !== flippedImg[dstIdx + 3]
+    ) {
+      isMirrored = false;
+      break;
+    }
+  }
+  if (!isMirrored) break;
+}
+check('右侧属性面板预览图跟随水平翻转', isMirrored, 'isMirrored=' + isMirrored);
+
+// 恢复未翻转状态，避免影响后续测试
+store.updateLayer(layer.id, { flipH: false });
+await sleep(150);
+
 // ============ 6. 撤销 / 重做 ============
 // 先盯按钮：canUndo/canRedo 曾经依赖非响应式数组，算出来的值永远停在 false，
 // 结果工具栏的撤销按钮一直是灰的，只有直接调 store.undo() 才动得了。

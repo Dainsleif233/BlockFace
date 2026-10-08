@@ -9,9 +9,11 @@ const props = withDefaults(
     skinId: string | null;
     /** 是否叠帽子层 */
     overlay?: boolean;
+    /** 是否水平翻转 */
+    flipH?: boolean;
     size?: number;
   }>(),
-  { overlay: true, size: 44 },
+  { overlay: true, flipH: false, size: 44 },
 );
 
 const el = ref<HTMLCanvasElement | null>(null);
@@ -32,11 +34,16 @@ function draw(): void {
   const skin = getSkin(props.skinId);
   if (!skin) return;
   const head = headCache.get(skin, props.overlay, pixels);
+  if (props.flipH) {
+    ctx.translate(pixels, 0);
+    ctx.scale(-1, 1);
+  }
   ctx.drawImage(head, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 onMounted(draw);
-watch(() => [props.skinId, props.overlay, props.size, editor.skinRevision], draw);
+watch(() => [props.skinId, props.overlay, props.flipH, props.size, editor.skinRevision], draw);
 defineExpose({ draw });
 </script>
 
