@@ -69,10 +69,8 @@ let drag: Drag | null = null;
 
 /** 触控点记录（用于双指捏合缩放与双指平移） */
 const activeTouches = new Map<number, { x: number; y: number }>();
-let pinchStartDist = 0;
-let pinchStartZoom = 1;
-let pinchStartMid = { x: 0, y: 0 };
-let pinchStartView = { x: 0, y: 0 };
+let lastPinchDist = 0;
+let lastPinchMid = { x: 0, y: 0 };
 
 function isTouchPointer(event: PointerEvent): boolean {
   return event.pointerType === 'touch' || (typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
@@ -259,10 +257,8 @@ function onPointerDown(event: PointerEvent): void {
     hover.value = null;
 
     const pts = Array.from(activeTouches.values());
-    pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    pinchStartZoom = viewScale.value;
-    pinchStartMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-    pinchStartView = { x: editor.view.x, y: editor.view.y };
+    lastPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    lastPinchMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
     if (editor.view.autoFit) {
       editor.view.zoom = fitScale.value;
       editor.view.autoFit = false;
@@ -328,29 +324,28 @@ function onPointerMove(event: PointerEvent): void {
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
   }
 
-  // 双指捏合缩放与平移
+  // 双指捏合缩放与平移（采用增量更新，锚定手指中心，彻底杜绝左上角漂移）
   if (activeTouches.size >= 2) {
     const pts = Array.from(activeTouches.values());
     const curDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     const curMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-    if (pinchStartDist > 0) {
-      const factor = curDist / pinchStartDist;
-      const rect = stage.value?.getBoundingClientRect();
-      if (rect) {
-        const next = zoomViewAt(
-          { zoom: pinchStartZoom, x: pinchStartView.x, y: pinchStartView.y },
-          { x: pinchStartMid.x - rect.left, y: pinchStartMid.y - rect.top },
-          { width: editor.document.width * pinchStartZoom, height: editor.document.height * pinchStartZoom },
-          factor,
-        );
-        const panX = curMid.x - pinchStartMid.x;
-        const panY = curMid.y - pinchStartMid.y;
-        editor.view.zoom = next.zoom;
-        editor.view.x = Math.round(next.x + panX);
-        editor.view.y = Math.round(next.y + panY);
-        editor.view.autoFit = false;
+
+    if (lastPinchDist > 0 && curDist > 0) {
+      const factor = curDist / lastPinchDist;
+      // 1. 围绕两指当前中心点平滑缩放
+      zoomAtCursor(factor, curMid.x, curMid.y);
+
+      // 2. 叠加上两指中心点的平移位移
+      const panX = curMid.x - lastPinchMid.x;
+      const panY = curMid.y - lastPinchMid.y;
+      if (panX !== 0 || panY !== 0) {
+        editor.view.x = Math.round(editor.view.x + panX);
+        editor.view.y = Math.round(editor.view.y + panY);
       }
     }
+
+    lastPinchDist = curDist;
+    lastPinchMid = curMid;
     return;
   }
 
@@ -428,7 +423,7 @@ function clearHover(): void {
 function onPointerUp(event: PointerEvent): void {
   activeTouches.delete(event.pointerId);
   if (activeTouches.size < 2) {
-    pinchStartDist = 0;
+    lastPinchDist = 0;
   }
 
   const active = drag;
