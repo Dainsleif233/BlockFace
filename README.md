@@ -48,7 +48,7 @@
 
 ### 环境要求
 - Node.js 18.0 或更高版本
-- 包管理器：`npm` / `pnpm`
+- 包管理器：`pnpm`
 
 ### 安装与启动
 
@@ -58,10 +58,10 @@ git clone https://github.com/jsucraft/BlockFace.git
 cd BlockFace
 
 # 安装依赖
-npm install
+pnpm install
 
 # 启动本地开发服务
-npm run dev
+pnpm dev
 ```
 
 启动后用浏览器访问 `http://localhost:5173/` 即可使用。
@@ -70,20 +70,20 @@ npm run dev
 
 ```bash
 # 检查类型并构建生产产物
-npm run build
+pnpm build
 
 # 本地预览生产构建产物
-npm run preview
+pnpm preview
 ```
 
 ### 测试验证
 
 ```bash
 # 运行单元测试 (Vitest) —— 涵盖数学变换、预设序列化、LRU缓存与素材历史保护
-npm test
+pnpm test
 
 # 运行真实浏览器端到端冒烟测试 (基于本机 Chrome DevTools Protocol)
-npm run e2e
+pnpm e2e
 ```
 
 ---

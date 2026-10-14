@@ -5,6 +5,7 @@
   "description": "BlockFace —— 纯前端工具：上传图片，贴上 Minecraft 头像，调整大小位置后导出 PNG。",
   "author": "Dainsleif",
   "license": "Apache-2.0",
+  "packageManager": "pnpm@10.8.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
