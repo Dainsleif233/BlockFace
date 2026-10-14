@@ -52,6 +52,15 @@
   --bf-font-size-ui: 13px;
 }
 
+@media (max-width: 840px) {
+  :root {
+    --bf-topbar: 52px;
+    --bf-statusbar: 50px;
+    --bf-pad: 10px;
+    --bf-gap: 10px;
+  }
+}
+
 /* ============================ 2. 基底 ============================ */
 * { box-sizing: border-box; }
 
@@ -233,7 +242,7 @@ h1, h2, h3, p { margin: 0; }
   pointer-events: none;
 }
 .bf-sl-knob b { position: absolute; inset: 4px; background: var(--bf-paper); }
-/* 真正接事件的透明 range，上下各留 13px 让鼠标好抓 */
+/* 真正接事件的透明 range，上下各留 13px 让鼠标好抓；触控设备加大热区 */
 .bf-sl input[type="range"] {
   position: absolute;
   left: 0; right: 0; top: 50%;
@@ -242,6 +251,12 @@ h1, h2, h3, p { margin: 0; }
   padding: 0;
   opacity: 0;
   cursor: ew-resize;
+}
+@media (pointer: coarse), (max-width: 840px) {
+  .bf-sl input[type="range"] {
+    height: 38px;
+    margin: -19px 0 0;
+  }
 }
 
 /* ============================ 8. 卡片 / 图层 / 芯片 ============================ */

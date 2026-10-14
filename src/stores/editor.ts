@@ -1383,6 +1383,22 @@ export async function importPresets(file: File): Promise<void> {
 loadPresets();
 
 /* ------------------------------------------------------------------ *
+ * 移动端抽屉 / 面板导航状态
+ * ------------------------------------------------------------------ */
+
+export type MobilePanel = 'none' | 'skin' | 'inspector';
+
+export const mobilePanel = ref<MobilePanel>('none');
+
+export function setMobilePanel(panel: MobilePanel): void {
+  mobilePanel.value = panel;
+}
+
+export function toggleMobilePanel(panel: 'skin' | 'inspector'): void {
+  mobilePanel.value = mobilePanel.value === panel ? 'none' : panel;
+}
+
+/* ------------------------------------------------------------------ *
  * 对外接口
  * ------------------------------------------------------------------ */
 

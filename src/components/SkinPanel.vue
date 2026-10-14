@@ -6,7 +6,9 @@ import {
   BUILTIN_SKINS,
   editor,
   MAX_BATCH,
+  mobilePanel,
   preloadBuiltins,
+  setMobilePanel,
   splitBatchInput,
   useAccountSkins,
   useBuiltinSkin,
@@ -119,7 +121,16 @@ async function onImageDrop(event: DragEvent): Promise<void> {
 </script>
 
 <template>
-  <aside class="rail rail--l">
+  <aside class="rail rail--l" :class="{ 'is-mobile-open': mobilePanel === 'skin' }">
+    <div class="mobile-drawer-bar">
+      <span class="mobile-drawer-title">
+        <i class="m-sq m-sq--grass" aria-hidden="true" /> 素材与皮肤
+      </span>
+      <button class="bf-btn bf-btn--sm bf-btn--go" type="button" @click="setMobilePanel('none')">
+        ✓ 完成
+      </button>
+    </div>
+
     <div class="rail__head">
       <h2>素材与皮肤</h2>
     </div>
@@ -399,5 +410,56 @@ async function onImageDrop(event: DragEvent): Promise<void> {
   font-style: normal;
   font-weight: 700;
   color: var(--bf-gold);
+}
+
+.mobile-drawer-bar { display: none; }
+
+@media (max-width: 840px) {
+  .rail--l {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: var(--bf-statusbar);
+    top: var(--bf-topbar);
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    z-index: 50;
+    border: 2px solid var(--bf-ink);
+    border-bottom: 0;
+    box-shadow: 0 -8px 30px rgba(20, 17, 15, 0.32);
+    background: var(--bf-paper);
+    display: none;
+  }
+  .rail--l.is-mobile-open {
+    display: flex;
+  }
+  .rail__head { display: none; }
+  .mobile-drawer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 44px;
+    padding: 0 14px;
+    background: var(--bf-white);
+    border-bottom: 1px solid var(--bf-ink);
+    flex: none;
+  }
+  .mobile-drawer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 700 14px/1 var(--bf-mono);
+    color: var(--bf-ink);
+  }
+  .m-sq {
+    width: 8px;
+    height: 8px;
+    background: var(--bf-ink);
+  }
+  .m-sq--grass { background: var(--bf-grass); }
+  .skin-del-btn {
+    opacity: 1;
+  }
 }
 </style>

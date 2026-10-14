@@ -16,6 +16,8 @@ import { composeDocument } from '../core/render/compose';
 import type { SkinTexture } from '../core/skin/texture';
 import {
   beginChange,
+  centerSelected,
+  duplicateLayer,
   editor,
   endChange,
   fitView,
@@ -27,6 +29,8 @@ import {
   rotateLayerBy,
   scaleLayerBy,
   selectLayer,
+  setMobilePanel,
+  updateLayer,
 } from '../stores/editor';
 
 /** 旋转手柄离顶边的屏幕距离 */
@@ -62,6 +66,17 @@ type Drag =
   | { kind: 'pan'; clientX: number; clientY: number; viewX: number; viewY: number; moved: boolean };
 
 let drag: Drag | null = null;
+
+/** 触控点记录（用于双指捏合缩放与双指平移） */
+const activeTouches = new Map<number, { x: number; y: number }>();
+let pinchStartDist = 0;
+let pinchStartZoom = 1;
+let pinchStartMid = { x: 0, y: 0 };
+let pinchStartView = { x: 0, y: 0 };
+
+function isTouchPointer(event: PointerEvent): boolean {
+  return event.pointerType === 'touch' || (typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
+}
 
 /** 悬浮在头像上时跟着光标走的名字条 */
 const hover = ref<{ name: string; x: number; y: number } | null>(null);
@@ -233,13 +248,41 @@ function hitTopLayer(point: { x: number; y: number }): AvatarLayer | null {
 }
 
 function onPointerDown(event: PointerEvent): void {
-  if (event.button !== 0) return;
+  if (event.button !== 0 && event.pointerType === 'mouse') return;
+  activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+  // 双指触控：进入捏合缩放与双指平移模式
+  if (activeTouches.size === 2) {
+    if (drag && drag.kind !== 'pan') endChange();
+    drag = null;
+    panning.value = false;
+    hover.value = null;
+
+    const pts = Array.from(activeTouches.values());
+    pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    pinchStartZoom = viewScale.value;
+    pinchStartMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    pinchStartView = { x: editor.view.x, y: editor.view.y };
+    if (editor.view.autoFit) {
+      editor.view.zoom = fitScale.value;
+      editor.view.autoFit = false;
+    }
+    capturePointer(event);
+    event.preventDefault();
+    return;
+  }
+
   const point = toDocumentPoint(event);
   const px = 1 / viewScale.value;
   const layer = selected.value;
 
+  // 触屏模式下加大命中热区（18px 代替 10px）
+  const isTouch = isTouchPointer(event) || wrapSize.value.w < 840;
+  const hitRadius = (isTouch ? 18 : HANDLE_HIT) * px;
+  const rotOffset = (isTouch ? 46 : ROTATE_OFFSET) * px;
+
   if (layer) {
-    const handle = hitTestHandle(layer, point.x, point.y, HANDLE_HIT * px, ROTATE_OFFSET * px);
+    const handle = hitTestHandle(layer, point.x, point.y, hitRadius, rotOffset);
     if (handle) {
       beginChange();
       drag = handle === 'rotate' ? { kind: 'rotate', id: layer.id } : { kind: 'resize', id: layer.id, handle };
@@ -281,6 +324,36 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (activeTouches.has(event.pointerId)) {
+    activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  }
+
+  // 双指捏合缩放与平移
+  if (activeTouches.size >= 2) {
+    const pts = Array.from(activeTouches.values());
+    const curDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    const curMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    if (pinchStartDist > 0) {
+      const factor = curDist / pinchStartDist;
+      const rect = stage.value?.getBoundingClientRect();
+      if (rect) {
+        const next = zoomViewAt(
+          { zoom: pinchStartZoom, x: pinchStartView.x, y: pinchStartView.y },
+          { x: pinchStartMid.x - rect.left, y: pinchStartMid.y - rect.top },
+          { width: editor.document.width * pinchStartZoom, height: editor.document.height * pinchStartZoom },
+          factor,
+        );
+        const panX = curMid.x - pinchStartMid.x;
+        const panY = curMid.y - pinchStartMid.y;
+        editor.view.zoom = next.zoom;
+        editor.view.x = Math.round(next.x + panX);
+        editor.view.y = Math.round(next.y + panY);
+        editor.view.autoFit = false;
+      }
+    }
+    return;
+  }
+
   const active = drag;
   if (!active) {
     updateHover(event);
@@ -353,6 +426,11 @@ function clearHover(): void {
 }
 
 function onPointerUp(event: PointerEvent): void {
+  activeTouches.delete(event.pointerId);
+  if (activeTouches.size < 2) {
+    pinchStartDist = 0;
+  }
+
   const active = drag;
   if (!active) return;
   drag = null;
@@ -425,6 +503,34 @@ function zoomBy(factor: number): void {
 
 function fit(): void {
   fitView();
+}
+
+function toggleFlip(): void {
+  const l = selected.value;
+  if (!l) return;
+  updateLayer(l.id, { flipH: !l.flipH });
+}
+
+function toggleOverlay(): void {
+  const l = selected.value;
+  if (!l) return;
+  updateLayer(l.id, { overlay: !l.overlay });
+}
+
+function duplicateSelected(): void {
+  const l = selected.value;
+  if (!l) return;
+  duplicateLayer(l.id);
+}
+
+function deleteSelected(): void {
+  const l = selected.value;
+  if (!l) return;
+  removeLayer(l.id);
+}
+
+function openInspector(): void {
+  setMobilePanel('inspector');
 }
 
 function onKeyDown(event: KeyboardEvent): void {
@@ -509,9 +615,9 @@ defineExpose({ schedule });
 <template>
   <section class="stage">
     <div class="stage__head">
-      <span class="bf-chip bf-chip--m"><i class="bf-chip-sq" aria-hidden="true" />底图 {{ baseChip }}</span>
+      <span class="bf-chip bf-chip--m bf-chip--hide-mobile"><i class="bf-chip-sq" aria-hidden="true" />底图 {{ baseChip }}</span>
       <span class="bf-chip bf-chip--m">显示 {{ zoomPercent }}%</span>
-      <span class="bf-chip">
+      <span class="bf-chip bf-chip--hide-mobile">
         <i class="bf-chip-sq bf-chip-sq--grass" aria-hidden="true" />
         图层 {{ editor.layers.length }} 个{{ selected ? ' · 选中 ' + selected.name : '' }}
       </span>
@@ -549,11 +655,42 @@ defineExpose({ schedule });
       </span>
 
       <p v-if="!editor.baseImage" class="stage__empty">把图片拖进窗口，或点顶栏的「打开图片」</p>
+
+      <!-- 移动端选中图层浮动快捷工具栏 -->
+      <div v-if="selected" class="mobile-action-bar" role="toolbar" aria-label="选中图层快捷操作">
+        <button class="m-act-btn" type="button" title="水平翻转" @click.stop="toggleFlip">
+          <span>翻转</span>
+        </button>
+        <button
+          class="m-act-btn"
+          :class="{ 'is-active': selected.overlay }"
+          type="button"
+          title="双层帽子开关"
+          @click.stop="toggleOverlay"
+        >
+          <i class="m-act-sq" :class="selected.overlay ? 'm-act-sq--grass' : ''" aria-hidden="true" />
+          <span>帽子</span>
+        </button>
+        <button class="m-act-btn" type="button" title="居中对齐" @click.stop="centerSelected">
+          <span>居中</span>
+        </button>
+        <button class="m-act-btn" type="button" title="复制图层" @click.stop="duplicateSelected">
+          <span>复制</span>
+        </button>
+        <button class="m-act-btn" type="button" title="打开属性面板" @click.stop="openInspector">
+          <span>属性</span>
+        </button>
+        <button class="m-act-btn m-act-btn--del" type="button" title="删除图层" @click.stop="deleteSelected">
+          <i class="bf-ic bf-ic--del" aria-hidden="true"><b /><b /></i>
+          <span>删除</span>
+        </button>
+      </div>
     </div>
 
     <div class="stage__foot">
-      <span class="bf-chip bf-chip--dark">头像 拖动 · 滚轮缩放 · Shift+滚轮旋转</span>
-      <span class="bf-chip bf-chip--dark">画布 拖动平移 · 滚轮缩放 · 适应窗口复位</span>
+      <span class="bf-chip bf-chip--dark desktop-only">头像 拖动 · 滚轮缩放 · Shift+滚轮旋转</span>
+      <span class="bf-chip bf-chip--dark desktop-only">画布 拖动平移 · 滚轮缩放 · 适应窗口复位</span>
+      <span class="bf-chip bf-chip--dark mobile-only">单指拖动画布 · 双指缩放</span>
     </div>
   </section>
 </template>
@@ -648,5 +785,70 @@ defineExpose({ schedule });
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
+}
+
+.mobile-action-bar { display: none; }
+.mobile-only { display: none; }
+
+@media (max-width: 840px) {
+  .stage {
+    padding: 8px;
+    gap: 8px;
+  }
+  .bf-chip--hide-mobile { display: none; }
+  .desktop-only { display: none; }
+  .mobile-only { display: inline-flex; }
+
+  .mobile-action-bar {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--bf-white);
+    border: 1px solid var(--bf-ink);
+    box-shadow: 3px 3px 0 var(--bf-ink);
+    white-space: nowrap;
+    max-width: calc(100% - 20px);
+    overflow-x: auto;
+  }
+  .m-act-btn {
+    height: 30px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--bf-rail);
+    border: 1px solid var(--bf-line);
+    font: 600 12px/1 var(--bf-sans);
+    color: var(--bf-ink);
+    cursor: pointer;
+    flex: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .m-act-btn:active {
+    background: var(--bf-paper);
+    transform: translate(1px, 1px);
+  }
+  .m-act-btn.is-active {
+    background: var(--bf-grass);
+    color: var(--bf-white);
+    border-color: var(--bf-ink);
+  }
+  .m-act-btn--del {
+    color: var(--bf-red-ink);
+    border-color: var(--bf-red);
+  }
+  .m-act-sq {
+    width: 6px;
+    height: 6px;
+    background: var(--bf-ink);
+    flex: none;
+  }
+  .m-act-sq--grass { background: var(--bf-grass); }
 }
 </style>

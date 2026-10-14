@@ -12,9 +12,11 @@ import {
   canUndo,
   editor,
   fitView,
+  mobilePanel,
   notify,
   redo,
   setBaseImage,
+  setMobilePanel,
   undo,
   useImageFile,
   useSkinFile,
@@ -143,6 +145,12 @@ onBeforeUnmount(() => {
     <TopBar />
 
     <div class="workbench">
+      <div
+        v-if="mobilePanel !== 'none'"
+        class="mobile-backdrop"
+        aria-hidden="true"
+        @click="setMobilePanel('none')"
+      />
       <SkinPanel />
       <StageCanvas />
       <InspectorPanel />
@@ -171,7 +179,24 @@ onBeforeUnmount(() => {
   background: var(--bf-paper);
 }
 
-.workbench { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
+.workbench {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  overflow: hidden;
+}
+
+.mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 17, 15, 0.5);
+  z-index: 45;
+}
+@media (min-width: 841px) {
+  .mobile-backdrop { display: none; }
+}
 
 .dropzone {
   position: fixed;

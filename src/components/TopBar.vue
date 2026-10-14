@@ -37,16 +37,16 @@ async function onFile(event: Event): Promise<void> {
 
     <div class="actions">
       <button class="bf-btn" type="button" :disabled="busy" @click="pick">
-        <i class="bf-ic bf-ic--open" aria-hidden="true"><b /><b /></i>打开图片
+        <i class="bf-ic bf-ic--open" aria-hidden="true"><b /><b /></i><span>打开<span class="btn-lbl--short">图片</span></span>
       </button>
       <input ref="fileInput" class="bf-sr-only" type="file" accept="image/*" @change="onFile" />
 
-      <button class="bf-btn" type="button" :disabled="busy" title="复制到剪贴板" @click="copyPng">
-        <i class="bf-ic bf-ic--copy" aria-hidden="true"><b /><b /></i>复制图片
+      <button class="bf-btn btn--desktop-only" type="button" :disabled="busy" title="复制到剪贴板" @click="copyPng">
+        <i class="bf-ic bf-ic--copy" aria-hidden="true"><b /><b /></i><span>复制图片</span>
       </button>
 
       <button class="bf-btn bf-btn--go" type="button" :disabled="busy" @click="exportPng">
-        <i class="bf-ic bf-ic--out" aria-hidden="true"><b /><b /></i>导出 PNG
+        <i class="bf-ic bf-ic--out" aria-hidden="true"><b /><b /></i><span>导出<span class="btn-lbl--short"> PNG</span></span>
       </button>
 
       <span class="topbar__sep" aria-hidden="true" />
@@ -100,4 +100,30 @@ async function onFile(event: Event): Promise<void> {
 .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 .busy { font-size: var(--bf-font-size-sm); color: var(--bf-ink2); }
+
+@media (max-width: 680px) {
+  .topbar {
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .brand { gap: 6px; }
+  .brand__name { font-size: 15px; }
+  .btn--desktop-only { display: none; }
+  .actions { gap: 6px; }
+}
+
+@media (max-width: 440px) {
+  .topbar__sep { display: none; }
+  .btn-lbl--short { display: none; }
+  .bf-btn {
+    height: 32px;
+    padding: 0 8px;
+    font-size: 12px;
+    gap: 5px;
+  }
+  .bf-btn--icon {
+    width: 32px;
+    height: 32px;
+  }
+}
 </style>

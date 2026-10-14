@@ -16,6 +16,7 @@ import {
   getSkin,
   importPresets,
   maxLayerSize,
+  mobilePanel,
   moveLayerTo,
   nudgeLayerOrder,
   removeLayer,
@@ -23,6 +24,7 @@ import {
   renamePreset,
   saveCurrentAsPreset,
   selectLayer,
+  setMobilePanel,
   updateLayer,
 } from '../stores/editor';
 import SkinThumb from './SkinThumb.vue';
@@ -276,7 +278,17 @@ async function onPresetFile(event: Event): Promise<void> {
 </script>
 
 <template>
-  <aside class="rail rail--r">
+  <aside class="rail rail--r" :class="{ 'is-mobile-open': mobilePanel === 'inspector' }">
+    <div class="mobile-drawer-bar">
+      <span class="mobile-drawer-title">
+        <i class="m-sq m-sq--cyan" aria-hidden="true" />
+        {{ layer ? (isCustomImage ? '图片属性 · ' + layer.name : '头像属性 · ' + layer.name) : '图层与预设' }}
+      </span>
+      <button class="bf-btn bf-btn--sm bf-btn--go" type="button" @click="setMobilePanel('none')">
+        ✓ 完成
+      </button>
+    </div>
+
     <div class="rail__head">
       <h2>{{ layer ? (isCustomImage ? '图片属性' : '头像属性') : '图层与预设' }}</h2>
       <span>{{ layer ? layer.name : '未选中' }}</span>
@@ -635,4 +647,57 @@ async function onPresetFile(event: Event): Promise<void> {
 }
 .preset__hint { margin-top: 9px; }
 .row__pick { display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0; text-align: left; }
+
+.mobile-drawer-bar { display: none; }
+
+@media (max-width: 840px) {
+  .rail--r {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: var(--bf-statusbar);
+    top: var(--bf-topbar);
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    z-index: 50;
+    border: 2px solid var(--bf-ink);
+    border-bottom: 0;
+    box-shadow: 0 -8px 30px rgba(20, 17, 15, 0.32);
+    background: var(--bf-paper);
+    display: none;
+  }
+  .rail--r.is-mobile-open {
+    display: flex;
+  }
+  .rail__head { display: none; }
+  .mobile-drawer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 44px;
+    padding: 0 14px;
+    background: var(--bf-white);
+    border-bottom: 1px solid var(--bf-ink);
+    flex: none;
+  }
+  .mobile-drawer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 700 14px/1 var(--bf-mono);
+    color: var(--bf-ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 75%;
+  }
+  .m-sq {
+    width: 8px;
+    height: 8px;
+    background: var(--bf-ink);
+    flex: none;
+  }
+  .m-sq--cyan { background: var(--bf-cyan); }
+}
 </style>
