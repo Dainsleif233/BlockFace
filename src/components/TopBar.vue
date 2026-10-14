@@ -1,6 +1,7 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import BrandLogo from './BrandLogo.vue';
 import {
   canRedo,
   canUndo,
@@ -30,7 +31,7 @@ async function onFile(event: Event): Promise<void> {
 <template>
   <header class="topbar">
     <div class="brand">
-      <span class="bf-glyph" aria-hidden="true"><i /><i /><i /><i /><i /><i /></span>
+      <BrandLogo />
       <span class="brand__name">BlockFace</span>
     </div>
     <span class="topbar__sep" aria-hidden="true" />

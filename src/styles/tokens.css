@@ -463,11 +463,4 @@ h1, h2, h3, p { margin: 0; }
 .bf-ic--down { clip-path: polygon(50% 100%, 0 45%, 35% 45%, 35% 0, 65% 0, 65% 45%, 100% 45%); }
 
 /* ============================ 10. 品牌标记 ============================ */
-.bf-glyph { display: flex; align-items: center; gap: 2px; height: 26px; flex: none; }
-.bf-glyph i { display: block; width: 8px; height: 8px; background: var(--bf-ink); }
-.bf-glyph i:nth-child(1) { transform: translateY(5px); }
-.bf-glyph i:nth-child(2) { transform: translateY(-3px); background: var(--bf-grass); }
-.bf-glyph i:nth-child(3) { transform: translateY(8px); }
-.bf-glyph i:nth-child(4) { transform: translateY(-6px); }
-.bf-glyph i:nth-child(5) { transform: translateY(1px); }
-.bf-glyph i:nth-child(6) { transform: translateY(-9px); background: var(--bf-cyan); }
+/* 品牌图标已全面升级为全新高精度 3D 等轴测矢量方块头 (BrandLogo.vue / favicon.svg) */
