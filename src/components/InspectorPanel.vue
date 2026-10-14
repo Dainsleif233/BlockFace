@@ -655,7 +655,7 @@ async function onPresetFile(event: Event): Promise<void> {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: var(--bf-statusbar);
+    bottom: calc(var(--bf-statusbar) + env(safe-area-inset-bottom, 0px));
     top: var(--bf-topbar);
     width: 100%;
     max-width: 520px;

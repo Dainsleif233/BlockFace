@@ -174,6 +174,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .app {
   height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--bf-paper);

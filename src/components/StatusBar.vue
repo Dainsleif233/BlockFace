@@ -112,8 +112,8 @@ const skinLabel = computed(() => {
   .st-mobile {
     display: flex;
     align-items: stretch;
-    height: var(--bf-statusbar);
-    padding-bottom: env(safe-area-inset-bottom, 0);
+    height: calc(var(--bf-statusbar) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .m-dock-btn {
     flex: 1;

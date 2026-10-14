@@ -102,6 +102,11 @@ const stageStyle = computed(() => ({
 }));
 
 const selected = computed(() => editor.layers.find((l) => l.id === editor.selectedId) ?? null);
+const isCustomSelected = computed(() => {
+  const l = selected.value;
+  if (!l) return false;
+  return getSkin(l.skinId)?.meta.isCustomImage === true;
+});
 const baseChip = computed(() =>
   editor.baseImage ? editor.baseImage.width + ' × ' + editor.baseImage.height : '未设置（导出透明底）',
 );
@@ -652,11 +657,21 @@ defineExpose({ schedule });
       <p v-if="!editor.baseImage" class="stage__empty">把图片拖进窗口，或点顶栏的「打开图片」</p>
 
       <!-- 移动端选中图层浮动快捷工具栏 -->
-      <div v-if="selected" class="mobile-action-bar" role="toolbar" aria-label="选中图层快捷操作">
+      <div
+        v-if="selected"
+        class="mobile-action-bar"
+        role="toolbar"
+        aria-label="选中图层快捷操作"
+        @pointerdown.stop
+        @pointermove.stop
+        @pointerup.stop
+        @pointercancel.stop
+      >
         <button class="m-act-btn" type="button" title="水平翻转" @click.stop="toggleFlip">
           <span>翻转</span>
         </button>
         <button
+          v-if="!isCustomSelected"
           class="m-act-btn"
           :class="{ 'is-active': selected.overlay }"
           type="button"
@@ -810,6 +825,7 @@ defineExpose({ schedule });
     white-space: nowrap;
     max-width: calc(100% - 20px);
     overflow-x: auto;
+    touch-action: pan-x;
   }
   .m-act-btn {
     height: 30px;
