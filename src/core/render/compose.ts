@@ -137,12 +137,27 @@ function drawFitted(
   ctx.drawImage(image, (width - w) / 2, (height - h) / 2, w, h);
 }
 
+interface PreparedCanvas {
+  ctx: CanvasRenderingContext2D;
+  scale: number;
+  width: number;
+  height: number;
+}
+
 /**
- * 渲染静态底图层（棋盘格 + 底图），供动静分离缓存复用。
- * 只在底图变更、文档尺寸改变或缩放倍率调整时执行一次，
- * 避免在图层拖动与手势交互过程中每帧重复执行高开销的图像重采样与棋盘格绘制。
+ * 计算受钳位约束的物理像素分辨率并初始化 Canvas 上下文。
+ * 消除 renderBackground 与 composeDocument 之间的尺寸计算与重置样板代码。
  */
-export function renderBackground(canvas: HTMLCanvasElement, options: BackgroundRenderOptions): void {
+function prepareCanvas(
+  canvas: HTMLCanvasElement,
+  options: {
+    width: number;
+    height: number;
+    scale?: number;
+    maxEdge?: number;
+    maxPixels?: number;
+  },
+): PreparedCanvas {
   const rawScale = options.scale ?? 1;
   const scale = (options.maxEdge || options.maxPixels)
     ? clampRenderScale(options.width, options.height, rawScale, options.maxEdge, options.maxPixels)
@@ -156,6 +171,17 @@ export function renderBackground(canvas: HTMLCanvasElement, options: BackgroundR
   if (!ctx) throw new Error('当前浏览器不支持 Canvas 2D');
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, width, height);
+
+  return { ctx, scale, width, height };
+}
+
+/**
+ * 渲染静态底图层（棋盘格 + 底图），供动静分离缓存复用。
+ * 只在底图变更、文档尺寸改变或缩放倍率调整时执行一次，
+ * 避免在图层拖动与手势交互过程中每帧重复执行高开销的图像重采样与棋盘格绘制。
+ */
+export function renderBackground(canvas: HTMLCanvasElement, options: BackgroundRenderOptions): void {
+  const { ctx, scale, width, height } = prepareCanvas(canvas, options);
 
   if (options.checkerboard) {
     drawCheckerboard(ctx, width, height, Math.max(8, Math.round(16 * scale)));
@@ -175,19 +201,7 @@ export function renderBackground(canvas: HTMLCanvasElement, options: BackgroundR
  * 头像按「输出设备像素」渲染后再贴合，因此导出二倍图时像素边缘依旧锐利，而不是被放大插值。
  */
 export function composeDocument(canvas: HTMLCanvasElement, options: ComposeOptions): void {
-  const rawScale = options.scale ?? 1;
-  const scale = (options.maxEdge || options.maxPixels)
-    ? clampRenderScale(options.width, options.height, rawScale, options.maxEdge, options.maxPixels)
-    : rawScale;
-  const width = Math.max(1, Math.round(options.width * scale));
-  const height = Math.max(1, Math.round(options.height * scale));
-  if (canvas.width !== width) canvas.width = width;
-  if (canvas.height !== height) canvas.height = height;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('当前浏览器不支持 Canvas 2D');
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+  const { ctx, scale, width, height } = prepareCanvas(canvas, options);
 
   // 动静分离：若传入了预渲染的静态底图缓存且尺寸匹配，直接 GPU 快速拷贝
   if (
