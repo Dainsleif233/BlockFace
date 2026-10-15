@@ -109,6 +109,30 @@ function normalizeSkin(raw: unknown): PresetSkin | null {
   };
 }
 
+/**
+ * 写入端：把「位图 → data URL」的编码结果整理成预设里的内嵌材质，与 normalizeSkin 配对。
+ *
+ * `frontOnly` 必须原样传下来：高清皮肤（256/512）提取出的正脸双层是 64×32 / 128×64，
+ * 与 64×32、128×64 的旧版整肤**同尺寸**，丢了标记就会被判成旧版皮肤、套用时切错区域。
+ * 尺寸写进了图里，标记没写进图里 —— 16×8 / 32×16 能靠尺寸自证，64×32 / 128×64 不能。
+ */
+export function createPresetSkin(input: {
+  dataUrl: string;
+  width: number;
+  height: number;
+  isCustomImage?: boolean;
+  frontOnly?: boolean;
+}): PresetSkin | null {
+  if (!isSafeImageDataUrl(input.dataUrl)) return null;
+  return {
+    dataUrl: input.dataUrl,
+    width: Math.round(input.width),
+    height: Math.round(input.height),
+    ...(input.isCustomImage ? { isCustomImage: true } : {}),
+    ...(input.frontOnly ? { frontOnly: true } : {}),
+  };
+}
+
 /** 把任意来源的一条头像记录收拾干净；收拾不出来就返回 null */
 export function normalizePresetLayer(raw: unknown, index = 0): PresetLayer | null {
   if (!isRecord(raw)) return null;

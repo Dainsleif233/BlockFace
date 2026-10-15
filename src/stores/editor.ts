@@ -7,7 +7,7 @@
 import { computed, reactive, ref } from 'vue';
 import {
   countEmbeddedImages,
-  isSafeImageDataUrl,
+  createPresetSkin,
   MAX_PRESETS,
   parsePresetFile,
   PresetParseError,
@@ -1193,14 +1193,11 @@ export function saveCurrentAsPreset(): void {
   for (const layer of state.layers) {
     const skin = getSkin(layer.skinId);
     const encoded = skin ? skinToDataUrl(skin) : null;
+    // 走 createPresetSkin 而不是手拼字段：frontOnly 是渲染时判别正脸双层贴图的唯一依据，
+    // 漏掉它，256/512 高清皮肤存出来的 64×32 / 128×64 就会被当成旧版整肤
     const embedded: PresetSkin | null =
-      encoded && skin && isSafeImageDataUrl(encoded.dataUrl)
-        ? {
-            dataUrl: encoded.dataUrl,
-            width: encoded.width,
-            height: encoded.height,
-            ...(skin.meta.isCustomImage ? { isCustomImage: true } : {}),
-          }
+      encoded && skin
+        ? createPresetSkin({ ...encoded, isCustomImage: skin.meta.isCustomImage === true })
         : null;
     if (!embedded) missingSkin += 1;
     layers.push({

@@ -1,8 +1,9 @@
 <!-- BlockFace · Copyright 2026 Dainsleif · Apache License 2.0 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
+import type { PresetSkin } from '../core/model/preset';
 import { MIN_LAYER_SIZE, type AvatarLayer } from '../core/model/types';
-import type { SkinOrigin } from '../core/skin/texture';
+import { describeSkin, type SkinOrigin } from '../core/skin/texture';
 import {
   addAvatar,
   applyPreset,
@@ -199,7 +200,7 @@ const presetRows = computed(() =>
       .filter((l) => l.skin)
       .slice(0, 3)
       .map((l) => {
-        const s = l.skin as { dataUrl: string; width: number; height: number; isCustomImage?: boolean };
+        const s = l.skin as PresetSkin;
         if (s.isCustomImage) {
           return {
             dataUrl: s.dataUrl,
@@ -208,8 +209,9 @@ const presetRows = computed(() =>
             isCustom: true,
           };
         }
-        const frontOnly = (s as { frontOnly?: boolean }).frontOnly === true || (s.width === s.height * 2 && s.width < 64);
-        if (frontOnly) {
+        // 规格判定直接复用渲染那条路径：缩略图该切哪一块只由 describeSkin 说了算
+        const meta = describeSkin(s.width, s.height, s.frontOnly === true);
+        if (meta.frontOnly) {
           return {
             dataUrl: s.dataUrl,
             bgSize: '200% 100%',
@@ -217,11 +219,10 @@ const presetRows = computed(() =>
             isCustom: false,
           };
         }
-        const isLegacy = s.height === s.width / 2;
         return {
           dataUrl: s.dataUrl,
-          bgSize: isLegacy ? '800% 400%' : '800% 800%',
-          bgPos: isLegacy ? '14.2857% 33.3333%' : '14.2857% 14.2857%',
+          bgSize: meta.legacy ? '800% 400%' : '800% 800%',
+          bgPos: meta.legacy ? '14.2857% 33.3333%' : '14.2857% 14.2857%',
           isCustom: false,
         };
       });

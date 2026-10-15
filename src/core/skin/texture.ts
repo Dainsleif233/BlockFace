@@ -22,9 +22,13 @@ export interface SkinMeta {
   height: number;
   /** 高清倍率 = width / 64（标准/旧版）或 width / 16（正脸双层），用于 UV 等比缩放 */
   scale: number;
-  /** 是否为 64×32 旧版格式（height * 2 === width && width >= 64） */
+  /** 是否为 64×32 旧版格式（height * 2 === width） */
   legacy: boolean;
-  /** 是否为正脸双层格式（底层正脸与帽子正脸并排，16×8 等比，height * 2 === width） */
+  /**
+   * 是否为正脸双层格式（底层正脸与帽子正脸并排，16×8 等比，height * 2 === width）。
+   * 16×8 / 32×16 靠尺寸就能自证；64×32、128×64 与旧版整肤同尺寸，只能靠预设里显式带的
+   * `frontOnly` 标记认出来（见 PresetSkin.frontOnly），因此这个字段必须一路带下去。
+   */
   frontOnly?: boolean;
   valid: boolean;
   /** 中文规格标签，直接用于界面展示 */
@@ -38,7 +42,8 @@ const FRONT_ONLY_LABEL = '正脸双层';
 const HD_LABEL = '高清';
 
 export function describeSkin(width: number, height: number, forceFrontOnly?: boolean): SkinMeta {
-  // 正脸双层格式：两张 8×8 (或 8*scale) 正脸并排，宽度为高度的 2 倍（16×8、32×16 等）
+  // 正脸双层格式：两张 8×8 (或 8*scale) 正脸并排，宽度为高度的 2 倍（16×8、32×16 等）。
+  // 64×32、128×64 与旧版整肤同尺寸，靠尺寸判不出来，只能认显式标记 forceFrontOnly。
   const isFrontOnly = forceFrontOnly === true || (height * 2 === width && width < 64 && width >= 16 && width % 16 === 0);
   if (isFrontOnly) {
     const scale = width / 16;

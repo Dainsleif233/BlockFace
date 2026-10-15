@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countEmbeddedImages,
   createPresetFile,
+  createPresetSkin,
   isSafeImageDataUrl,
   MAX_LAYER_POSITION,
   MAX_PRESETS,
@@ -106,6 +107,42 @@ describe('头像条目归一化', () => {
     expect(front?.skin?.frontOnly).toBe(true);
     expect(front?.skin?.width).toBe(16);
     expect(front?.skin?.height).toBe(8);
+  });
+});
+
+describe('内嵌材质写入端', () => {
+  // 256×256 与 512×512 皮肤提取出的正脸双层是 64×32 / 128×64，与旧版整肤同尺寸。
+  // 标记丢一次，套用预设时就会被判成旧版皮肤、从错误的区域取样。
+  it('原样带上 frontOnly', () => {
+    const written = createPresetSkin({ dataUrl: PNG, width: 64, height: 32, frontOnly: true });
+    expect(written?.frontOnly).toBe(true);
+    expect(written?.width).toBe(64);
+    expect(written?.height).toBe(32);
+  });
+
+  it('不是正脸双层时不写这个字段', () => {
+    expect(createPresetSkin({ dataUrl: PNG, width: 64, height: 64 })?.frontOnly).toBeUndefined();
+    expect(createPresetSkin({ dataUrl: PNG, width: 64, height: 64, frontOnly: false })?.frontOnly).toBeUndefined();
+  });
+
+  it('保留通用头像图片标记 isCustomImage，且不与 frontOnly 混用', () => {
+    const written = createPresetSkin({ dataUrl: PNG, width: 400, height: 300, isCustomImage: true });
+    expect(written?.isCustomImage).toBe(true);
+    expect(written?.frontOnly).toBeUndefined();
+  });
+
+  it('白名单以外的 data URL 一律不写入', () => {
+    expect(createPresetSkin({ dataUrl: 'javascript:alert(1)', width: 16, height: 8 })).toBeNull();
+    expect(createPresetSkin({ dataUrl: 'http://example.com/a.png', width: 16, height: 8 })).toBeNull();
+  });
+
+  it('写入 → 读取往返不丢标记', () => {
+    const written = createPresetSkin({ dataUrl: PNG, width: 64, height: 32, frontOnly: true });
+    expect(written).not.toBeNull();
+    const read = normalizePresetLayer(layer({ skin: written }), 0);
+    expect(read?.skin?.frontOnly).toBe(true);
+    expect(read?.skin?.width).toBe(64);
+    expect(read?.skin?.height).toBe(32);
   });
 });
 

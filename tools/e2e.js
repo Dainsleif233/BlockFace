@@ -824,6 +824,54 @@ check('一次批量有上限，手一抖粘一百个也不会炸',
   store.splitBatchInput(Array.from({ length: 40 }, (_, i) => 'player' + i).join(' ')).length === store.MAX_BATCH,
   'MAX_BATCH=' + store.MAX_BATCH);
 
+// ============ 12. 高清皮肤存预设再套用：逐像素还原 ============
+// 256 皮肤存出来的是 64×32 正脸双层，与 64×32 旧版整肤同尺寸。
+// 正脸画成 8×8 每像素一色，一旦被判成旧版、从错误区域取样，像素差异立刻暴露。
+const hdFrontCanvas = document.createElement('canvas');
+hdFrontCanvas.width = 256;
+hdFrontCanvas.height = 256;
+const hdFrontCtx = hdFrontCanvas.getContext('2d');
+for (let py = 0; py < 8; py += 1) {
+  for (let px = 0; px < 8; px += 1) {
+    hdFrontCtx.fillStyle = 'rgb(' + (px * 30) + ',' + (py * 30) + ',200)';
+    hdFrontCtx.fillRect((8 + px) * 4, (8 + py) * 4, 4, 4);
+  }
+}
+const hdFrontBlob = await new Promise((r) => hdFrontCanvas.toBlob(r, 'image/png'));
+await store.useSkinFile(new File([hdFrontBlob], 'hd-front.png', { type: 'image/png' }));
+await sleep(400);
+const hdFrontRecord = editor.skins[editor.skins.length - 1];
+check('高清皮肤就位（用于预设往返）', /^256×256 · 高清/.test(hdFrontRecord.meta.label), hdFrontRecord.meta.label);
+
+store.addAvatar();
+await sleep(320);
+const hdFrontLayer = editor.layers[editor.layers.length - 1];
+const headBeforePreset = renderHeadCanvasRef(store.getSkin(hdFrontLayer.skinId), { overlay: false, pixelSize: 64 });
+
+store.saveCurrentAsPreset();
+await sleep(400);
+const hdPreset = editor.presets[0];
+const hdEmbedded = hdPreset.layers.map((l) => l.skin).filter(Boolean).find((s) => s.width === 64 && s.height === 32) || null;
+check('高清皮肤存进预设时只留 64×32 正脸双层',
+  !!hdEmbedded, hdEmbedded ? hdEmbedded.width + '×' + hdEmbedded.height : '预设里找不到 64×32 材质');
+check('正脸双层标记跟着进预设（丢了就会被当成 64×32 旧版整肤）',
+  !!hdEmbedded && hdEmbedded.frontOnly === true, hdEmbedded ? 'frontOnly=' + hdEmbedded.frontOnly : '没有材质');
+
+for (const item of [...editor.layers]) store.removeLayer(item.id);
+await sleep(320);
+await store.applyPreset(hdPreset.id);
+await sleep(1100);
+const restoredHdLayer = editor.layers[editor.layers.length - 1];
+const restoredHdSkin = store.getSkin(restoredHdLayer.skinId);
+check('套用预设后仍认得出是正脸双层', !!restoredHdSkin && restoredHdSkin.meta.frontOnly === true,
+  restoredHdSkin ? restoredHdSkin.meta.label : '没有皮肤');
+const restoreDiff = countDiff(headBeforePreset, renderHeadCanvasRef(restoredHdSkin, { overlay: false, pixelSize: 64 }));
+check('套用预设后的头像与保存前逐像素一致', restoreDiff.pixels === 0,
+  '不一致 ' + restoreDiff.pixels + '/4096 像素，最大色差 ' + restoreDiff.maxChannel);
+
+store.removePreset(hdPreset.id);
+await sleep(200);
+
 const failed = results.filter((r) => !r.pass);
 const skipped = results.filter((r) => r.skipped);
 return { total: results.length, failed: failed.length, skipped: skipped.length, results };
