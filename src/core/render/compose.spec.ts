@@ -4,12 +4,40 @@
  * Licensed under the Apache License, Version 2.0
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   clampRenderScale,
+  composeDocument,
+  renderBackground,
   MAX_CANVAS_EDGE,
   MAX_CANVAS_PIXELS,
 } from './compose';
+
+function createMockCanvas(width = 0, height = 0) {
+  const ctx = {
+    setTransform: vi.fn(),
+    clearRect: vi.fn(),
+    drawImage: vi.fn(),
+    fillRect: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    scale: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    createPattern: vi.fn(() => ({})),
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    globalAlpha: 1,
+    imageSmoothingEnabled: true,
+  };
+  const canvas = {
+    width,
+    height,
+    getContext: vi.fn((type: string) => (type === '2d' ? ctx : null)),
+  };
+  return { canvas: canvas as unknown as HTMLCanvasElement, ctx };
+}
 
 describe('clampRenderScale', () => {
   it('在安全范围内保持原缩放倍率不变', () => {
@@ -53,5 +81,36 @@ describe('clampRenderScale', () => {
     expect(clampRenderScale(0, 800, 2)).toBe(1);
     expect(clampRenderScale(1280, -10, 2)).toBe(1);
     expect(clampRenderScale(1280, 800, 0)).toBe(1);
+  });
+});
+
+describe('renderBackground 与动静分离缓存', () => {
+  it('正确设置底图画布物理分辨率并重置变换', () => {
+    const { canvas, ctx } = createMockCanvas();
+    renderBackground(canvas, {
+      width: 200,
+      height: 100,
+      scale: 2,
+    });
+    expect(canvas.width).toBe(400);
+    expect(canvas.height).toBe(200);
+    expect(ctx.setTransform).toHaveBeenCalledWith(1, 0, 0, 1, 0, 0);
+    expect(ctx.clearRect).toHaveBeenCalledWith(0, 0, 400, 200);
+  });
+
+  it('composeDocument 传入匹配的 backgroundCanvas 时直接快速 blit', () => {
+    const { canvas: bgCanvas } = createMockCanvas(100, 100);
+    const { canvas: docCanvas, ctx: docCtx } = createMockCanvas();
+
+    composeDocument(docCanvas, {
+      width: 100,
+      height: 100,
+      backgroundCanvas: bgCanvas,
+      items: [],
+    });
+
+    expect(docCanvas.width).toBe(100);
+    expect(docCanvas.height).toBe(100);
+    expect(docCtx.drawImage).toHaveBeenCalledWith(bgCanvas, 0, 0);
   });
 });

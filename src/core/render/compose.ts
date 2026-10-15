@@ -31,6 +31,21 @@ export interface ComposeOptions {
   maxEdge?: number;
   /** 最大总像素限制（传值时生效） */
   maxPixels?: number;
+  /** 预渲染好的静态底图缓存（动静分层），传入时直接 GPU 快速拷贝，避免在交互拖拽时重复执行棋盘格与底图采样 */
+  backgroundCanvas?: HTMLCanvasElement | null;
+}
+
+export interface BackgroundRenderOptions {
+  /** 文档逻辑尺寸 */
+  width: number;
+  height: number;
+  /** 输出倍率 */
+  scale?: number;
+  baseImage?: CanvasImageSource | null;
+  fit?: 'cover' | 'contain';
+  checkerboard?: boolean;
+  maxEdge?: number;
+  maxPixels?: number;
 }
 
 /** 单个头像离屏渲染的设备像素上限，避免超大图层导致 OOM */
@@ -67,7 +82,36 @@ export function clampRenderScale(
   return scale;
 }
 
+let checkerPatternCanvas: HTMLCanvasElement | null = null;
+let checkerPatternCell = 0;
+let checkerPattern: CanvasPattern | null = null;
+
+function getCheckerPattern(ctx: CanvasRenderingContext2D, cell: number): CanvasPattern | null {
+  if (checkerPattern && checkerPatternCell === cell) return checkerPattern;
+  if (typeof document === 'undefined') return null;
+  const canvas = checkerPatternCanvas || document.createElement('canvas');
+  checkerPatternCanvas = canvas;
+  checkerPatternCell = cell;
+  canvas.width = cell * 2;
+  canvas.height = cell * 2;
+  const pctx = canvas.getContext('2d');
+  if (!pctx) return null;
+  pctx.fillStyle = '#2b2d34';
+  pctx.fillRect(0, 0, cell * 2, cell * 2);
+  pctx.fillStyle = '#23252b';
+  pctx.fillRect(cell, 0, cell, cell);
+  pctx.fillRect(0, cell, cell, cell);
+  checkerPattern = ctx.createPattern(canvas, 'repeat');
+  return checkerPattern;
+}
+
 function drawCheckerboard(ctx: CanvasRenderingContext2D, width: number, height: number, cell: number): void {
+  const pattern = getCheckerPattern(ctx, cell);
+  if (pattern) {
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, width, height);
+    return;
+  }
   for (let y = 0; y < height; y += cell) {
     for (let x = 0; x < width; x += cell) {
       ctx.fillStyle = (Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0 ? '#2b2d34' : '#23252b';
@@ -94,6 +138,35 @@ function drawFitted(
 }
 
 /**
+ * 渲染静态底图层（棋盘格 + 底图），供动静分离缓存复用。
+ * 只在底图变更、文档尺寸改变或缩放倍率调整时执行一次，
+ * 避免在图层拖动与手势交互过程中每帧重复执行高开销的图像重采样与棋盘格绘制。
+ */
+export function renderBackground(canvas: HTMLCanvasElement, options: BackgroundRenderOptions): void {
+  const rawScale = options.scale ?? 1;
+  const scale = (options.maxEdge || options.maxPixels)
+    ? clampRenderScale(options.width, options.height, rawScale, options.maxEdge, options.maxPixels)
+    : rawScale;
+  const width = Math.max(1, Math.round(options.width * scale));
+  const height = Math.max(1, Math.round(options.height * scale));
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('当前浏览器不支持 Canvas 2D');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (options.checkerboard) {
+    drawCheckerboard(ctx, width, height, Math.max(8, Math.round(16 * scale)));
+  }
+
+  if (options.baseImage) {
+    drawFitted(ctx, options.baseImage, width, height, options.fit ?? 'cover');
+  }
+}
+
+/**
  * 把「底图 + 若干头像图层」合成为一张图。
  *
  * 这是**预览与导出共用的唯一渲染入口**——预览与导出各写一套是本类工具最经典的 bug 来源
@@ -116,12 +189,20 @@ export function composeDocument(canvas: HTMLCanvasElement, options: ComposeOptio
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  if (options.checkerboard) {
-    drawCheckerboard(ctx, width, height, Math.max(8, Math.round(16 * scale)));
-  }
-
-  if (options.baseImage) {
-    drawFitted(ctx, options.baseImage, width, height, options.fit ?? 'cover');
+  // 动静分离：若传入了预渲染的静态底图缓存且尺寸匹配，直接 GPU 快速拷贝
+  if (
+    options.backgroundCanvas &&
+    options.backgroundCanvas.width === width &&
+    options.backgroundCanvas.height === height
+  ) {
+    ctx.drawImage(options.backgroundCanvas, 0, 0);
+  } else {
+    if (options.checkerboard) {
+      drawCheckerboard(ctx, width, height, Math.max(8, Math.round(16 * scale)));
+    }
+    if (options.baseImage) {
+      drawFitted(ctx, options.baseImage, width, height, options.fit ?? 'cover');
+    }
   }
 
   const cache = options.cache ?? headCache;
