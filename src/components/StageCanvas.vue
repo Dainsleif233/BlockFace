@@ -120,19 +120,33 @@ const baseChip = computed(() =>
 const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
 
 /**
- * 实时预览渲染倍率：限制在安全最大单边与总像素阈值内。
- * 当用户超大比例缩放或载入超高分辨率底图时，锁定画布物理缓冲大小，
- * 避免频繁 GPU 纹理重建与显存爆炸（OOM），保持流畅 60fps 交互。
+ * 方案一：Canvas 物理缓冲与视图缩放解耦（CSS 硬件加速变换）
+ * 连续滚轮或双指缩放手势期间，外层容器 `.artboard` 依靠 CSS 即时变换（120 FPS 满帧跟手），
+ * 内部 Canvas 物理分辨率在手势活跃期保持稳定，避免高频销毁和重建 GPU 纹理显存；
+ * 手势停顿 150ms 处于稳定状态后再更新物理分辨率，使视觉清晰度与交互流畅度两全其美。
  */
-const previewScale = computed(() =>
-  clampRenderScale(
+const settledZoom = ref(editor.view.zoom);
+let zoomDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function markZooming(): void {
+  if (zoomDebounceTimer) clearTimeout(zoomDebounceTimer);
+  zoomDebounceTimer = setTimeout(() => {
+    zoomDebounceTimer = null;
+    settledZoom.value = editor.view.zoom;
+    schedule();
+  }, 150);
+}
+
+const previewScale = computed(() => {
+  const currentViewScale = editor.view.autoFit ? fitScale.value : settledZoom.value;
+  return clampRenderScale(
     editor.document.width,
     editor.document.height,
-    viewScale.value * dpr(),
+    currentViewScale * dpr(),
     MAX_CANVAS_EDGE,
     MAX_CANVAS_PIXELS,
-  ),
-);
+  );
+});
 
 let frame = 0;
 function schedule(): void {
@@ -550,6 +564,7 @@ function zoomAtCursor(factor: number, clientX: number, clientY: number): void {
   editor.view.x = next.x;
   editor.view.y = next.y;
   editor.view.autoFit = false;
+  markZooming();
 }
 
 /** 工具栏上的放大 / 缩小：锚在画布可见区域的中心 */
@@ -559,7 +574,13 @@ function zoomBy(factor: number): void {
 }
 
 function fit(): void {
+  if (zoomDebounceTimer) {
+    clearTimeout(zoomDebounceTimer);
+    zoomDebounceTimer = null;
+  }
   fitView();
+  settledZoom.value = fitScale.value;
+  schedule();
 }
 
 function toggleFlip(): void {
@@ -650,6 +671,7 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   window.removeEventListener('keydown', onKeyDown);
   if (frame) cancelAnimationFrame(frame);
+  if (zoomDebounceTimer) clearTimeout(zoomDebounceTimer);
   bgCacheCanvas = null;
   bgCacheKey = '';
 });
@@ -808,6 +830,7 @@ defineExpose({ schedule });
   border: 1px solid var(--bf-ink);
   background: var(--bf-board);
   box-shadow: 0 0 0 1px var(--bf-stage-major);
+  will-change: transform;
 }
 
 .artboard__doc,
