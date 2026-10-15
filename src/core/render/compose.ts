@@ -27,10 +27,45 @@ export interface ComposeOptions {
   /** 预览用的棋盘透明底（导出时关闭） */
   checkerboard?: boolean;
   cache?: HeadCache;
+  /** 最大单边物理像素限制（传值时生效，避免超大画布或高倍缩放导致显存爆炸） */
+  maxEdge?: number;
+  /** 最大总像素限制（传值时生效） */
+  maxPixels?: number;
 }
 
 /** 单个头像离屏渲染的设备像素上限，避免超大图层导致 OOM */
 const MAX_HEAD_PIXELS = 2048;
+
+/** 画布渲染最大单边物理像素上限，防止超大画布或高倍缩放导致显存爆炸与浏览器崩溃 */
+export const MAX_CANVAS_EDGE = 4096;
+
+/** 画布渲染最大总像素上限（约 1600 万像素，RGBA 占用约 64MB 显存） */
+export const MAX_CANVAS_PIXELS = 4096 * 4096;
+
+/**
+ * 计算受最大单边与总像素限制的安全渲染倍率（Clamped Scale）。
+ * 保证在视口极端放大或加载超大底图时，Canvas 物理分辨率不会无节制膨胀，
+ * 保护 GPU 显存并维持高帧率交互。
+ */
+export function clampRenderScale(
+  width: number,
+  height: number,
+  desiredScale = 1,
+  maxEdge = MAX_CANVAS_EDGE,
+  maxPixels = MAX_CANVAS_PIXELS,
+): number {
+  if (width <= 0 || height <= 0 || desiredScale <= 0) return 1;
+  let scale = desiredScale;
+  if (maxEdge > 0) {
+    const edgeLimit = Math.min(maxEdge / width, maxEdge / height);
+    if (scale > edgeLimit) scale = edgeLimit;
+  }
+  if (maxPixels > 0) {
+    const pixelLimit = Math.sqrt(maxPixels / (width * height));
+    if (scale > pixelLimit) scale = pixelLimit;
+  }
+  return scale;
+}
 
 function drawCheckerboard(ctx: CanvasRenderingContext2D, width: number, height: number, cell: number): void {
   for (let y = 0; y < height; y += cell) {
@@ -67,11 +102,14 @@ function drawFitted(
  * 头像按「输出设备像素」渲染后再贴合，因此导出二倍图时像素边缘依旧锐利，而不是被放大插值。
  */
 export function composeDocument(canvas: HTMLCanvasElement, options: ComposeOptions): void {
-  const scale = options.scale ?? 1;
+  const rawScale = options.scale ?? 1;
+  const scale = (options.maxEdge || options.maxPixels)
+    ? clampRenderScale(options.width, options.height, rawScale, options.maxEdge, options.maxPixels)
+    : rawScale;
   const width = Math.max(1, Math.round(options.width * scale));
   const height = Math.max(1, Math.round(options.height * scale));
-  canvas.width = width;
-  canvas.height = height;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
 
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('当前浏览器不支持 Canvas 2D');

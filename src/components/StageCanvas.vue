@@ -12,7 +12,12 @@ import {
   resizeFromHandle,
   rotationFromHandle,
 } from '../core/model/transform';
-import { composeDocument } from '../core/render/compose';
+import {
+  clampRenderScale,
+  composeDocument,
+  MAX_CANVAS_EDGE,
+  MAX_CANVAS_PIXELS,
+} from '../core/render/compose';
 import type { SkinTexture } from '../core/skin/texture';
 import {
   beginChange,
@@ -113,6 +118,21 @@ const baseChip = computed(() =>
 
 const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
 
+/**
+ * 实时预览渲染倍率：限制在安全最大单边与总像素阈值内。
+ * 当用户超大比例缩放或载入超高分辨率底图时，锁定画布物理缓冲大小，
+ * 避免频繁 GPU 纹理重建与显存爆炸（OOM），保持流畅 60fps 交互。
+ */
+const previewScale = computed(() =>
+  clampRenderScale(
+    editor.document.width,
+    editor.document.height,
+    viewScale.value * dpr(),
+    MAX_CANVAS_EDGE,
+    MAX_CANVAS_PIXELS,
+  ),
+);
+
 let frame = 0;
 function schedule(): void {
   if (frame) return;
@@ -139,7 +159,7 @@ function renderDocument(): void {
   composeDocument(canvas, {
     width: editor.document.width,
     height: editor.document.height,
-    scale: viewScale.value * dpr(),
+    scale: previewScale.value,
     baseImage,
     items,
     // 没有底图时预览铺棋盘：那块地方导出就是透明的
@@ -150,7 +170,7 @@ function renderDocument(): void {
 function renderOverlay(): void {
   const canvas = overlayCanvas.value;
   if (!canvas) return;
-  const scale = viewScale.value * dpr();
+  const scale = previewScale.value;
   const w = Math.max(1, Math.round(editor.document.width * scale));
   const h = Math.max(1, Math.round(editor.document.height * scale));
   if (canvas.width !== w) canvas.width = w;
