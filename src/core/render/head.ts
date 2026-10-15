@@ -89,6 +89,17 @@ export function renderHeadCanvas(skin: SkinTexture, options: HeadRenderOptions):
 
   ctx.imageSmoothingEnabled = false;
 
+  if (skin.meta.frontOnly) {
+    const faceSize = 8 * scale;
+    // 正脸底层：位于左半部分 [0, 0, faceSize, faceSize]
+    ctx.drawImage(skin.image, 0, 0, faceSize, faceSize, 0, 0, size, size);
+    // 帽子层正脸：位于右半部分 [faceSize, 0, faceSize, faceSize]
+    if (options.overlay) {
+      ctx.drawImage(skin.image, faceSize, 0, faceSize, faceSize, 0, 0, size, size);
+    }
+    return canvas;
+  }
+
   drawRegion(ctx, skin, HEAD_REGIONS.front, scale, size);
   if (options.overlay) drawRegion(ctx, skin, HAT_REGIONS.front, scale, size);
 

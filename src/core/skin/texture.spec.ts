@@ -42,9 +42,39 @@ describe('describeSkin', () => {
     expect(meta.scale).toBe(2);
   });
 
+  it('识别 16×8 正脸双层格式', () => {
+    const meta = describeSkin(16, 8);
+    expect(meta.valid).toBe(true);
+    expect(meta.frontOnly).toBe(true);
+    expect(meta.scale).toBe(1);
+    expect(meta.label).toBe('16×8 · 正脸双层');
+  });
+
+  it('识别 32×16 高清正脸双层格式', () => {
+    const meta = describeSkin(32, 16);
+    expect(meta.valid).toBe(true);
+    expect(meta.frontOnly).toBe(true);
+    expect(meta.scale).toBe(2);
+    expect(meta.label).toContain('正脸双层（高清 ×2）');
+  });
+
+  it('显式指定 forceFrontOnly 区分 64×32 高清正脸与旧版格式', () => {
+    const legacy = describeSkin(64, 32);
+    expect(legacy.legacy).toBe(true);
+    expect(legacy.frontOnly).toBe(false);
+    expect(legacy.scale).toBe(1);
+
+    const front = describeSkin(64, 32, true);
+    expect(front.legacy).toBe(false);
+    expect(front.frontOnly).toBe(true);
+    expect(front.scale).toBe(4);
+    expect(front.label).toContain('正脸双层（高清 ×4）');
+  });
+
   it.each([
     [63, 63],
     [64, 40],
+    [64, 16],
     [100, 100],
     [64, 128],
     [32, 32],

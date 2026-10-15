@@ -100,6 +100,13 @@ describe('头像条目归一化', () => {
     const normal = normalizePresetLayer(layer({ skin: { dataUrl: PNG, width: 64, height: 64 } }), 0);
     expect(normal?.skin?.isCustomImage).toBeUndefined();
   });
+
+  it('保留正脸双层标记 frontOnly', () => {
+    const front = normalizePresetLayer(layer({ skin: { dataUrl: PNG, width: 16, height: 8, frontOnly: true } }), 0);
+    expect(front?.skin?.frontOnly).toBe(true);
+    expect(front?.skin?.width).toBe(16);
+    expect(front?.skin?.height).toBe(8);
+  });
 });
 
 describe('预设 = 一张图上的全部头像', () => {

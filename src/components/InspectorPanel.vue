@@ -208,6 +208,15 @@ const presetRows = computed(() =>
             isCustom: true,
           };
         }
+        const frontOnly = (s as { frontOnly?: boolean }).frontOnly === true || (s.width === s.height * 2 && s.width < 64);
+        if (frontOnly) {
+          return {
+            dataUrl: s.dataUrl,
+            bgSize: '200% 100%',
+            bgPos: '0% 0%',
+            isCustom: false,
+          };
+        }
         const isLegacy = s.height === s.width / 2;
         return {
           dataUrl: s.dataUrl,

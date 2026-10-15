@@ -439,10 +439,11 @@ function registerSkin(
   id?: string,
   activate = true,
   isCustomImage = false,
+  isFrontOnly = false,
 ): SkinTexture {
   const meta = isCustomImage
     ? describeCustomImage(loaded.width, loaded.height)
-    : describeSkin(loaded.width, loaded.height);
+    : describeSkin(loaded.width, loaded.height, isFrontOnly);
   if (!isCustomImage) {
     assertUsableSkin(meta);
   }
@@ -1120,30 +1121,57 @@ function uniquePresetName(base: string, exceptId?: string): string {
   return name;
 }
 
-/** 皮肤位图 → PNG data URI 与实际尺寸；通用头像等比限制在 512px 内以防超出 1.5MB 限制与 LocalStorage 溢出；画布被污染时返回 null */
-function skinToDataUrl(skin: SkinTexture): { dataUrl: string; width: number; height: number } | null {
+/** 皮肤位图 → PNG data URI 与实际尺寸；MC皮肤仅存正脸双层（底层与帽子层并排，16×8 等比），通用头像等比限制在 512px 内以防超出 1.5MB 限制与 LocalStorage 溢出；画布被污染时返回 null */
+function skinToDataUrl(skin: SkinTexture): { dataUrl: string; width: number; height: number; frontOnly?: boolean } | null {
   try {
     const isCustom = skin.meta.isCustomImage === true;
-    let w = skin.meta.width;
-    let h = skin.meta.height;
     if (isCustom) {
+      let w = skin.meta.width;
+      let h = skin.meta.height;
       const maxDim = 512;
       if (w > maxDim || h > maxDim) {
         const ratio = Math.min(maxDim / w, maxDim / h);
         w = Math.max(1, Math.round(w * ratio));
         h = Math.max(1, Math.round(h * ratio));
       }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(skin.image, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/png');
+      return { dataUrl, width: w, height: h };
     }
+
+    // 预设仅存正脸双层：底层正脸与帽子层正脸并排，尺寸为 (16*scale) × (8*scale)
+    const scale = skin.meta.scale;
+    const faceSize = 8 * scale;
+    const w = faceSize * 2;
+    const h = faceSize;
+
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.imageSmoothingEnabled = isCustom;
-    if (isCustom) ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(skin.image, 0, 0, w, h);
+    ctx.imageSmoothingEnabled = false;
+
+    if (skin.meta.frontOnly) {
+      // 本身已经是正脸双层，直接 1:1 拷贝
+      ctx.drawImage(skin.image, 0, 0, w, h);
+    } else {
+      // 从完整皮肤或头部展开图提取正脸底层与帽子层正脸
+      // 正脸底层：HEAD_REGIONS.front [8, 8, 8, 8]
+      ctx.drawImage(skin.image, 8 * scale, 8 * scale, faceSize, faceSize, 0, 0, faceSize, faceSize);
+      // 帽子层正脸：HAT_REGIONS.front [40, 8, 8, 8]
+      ctx.drawImage(skin.image, 40 * scale, 8 * scale, faceSize, faceSize, faceSize, 0, faceSize, faceSize);
+    }
+
     const dataUrl = canvas.toDataURL('image/png');
-    return { dataUrl, width: w, height: h };
+    return { dataUrl, width: w, height: h, frontOnly: true };
   } catch {
     return null;
   }
@@ -1219,7 +1247,7 @@ export async function applyPreset(id: string): Promise<void> {
   state.busy = `载入预设 ${preset.name}`;
   try {
     // 要用的皮肤先全部解出来：中途失败就保持原样，不把画布搅成半成品
-    const ready: { layer: PresetLayer; loaded: LoadedImage; isCustom: boolean }[] = [];
+    const ready: { layer: PresetLayer; loaded: LoadedImage; isCustom: boolean; isFrontOnly: boolean }[] = [];
     let fallbackLoaded: LoadedImage | null = null;
     let fallbackCount = 0;
 
@@ -1236,11 +1264,13 @@ export async function applyPreset(id: string): Promise<void> {
     for (const item of preset.layers) {
       let loaded: LoadedImage | null = null;
       let isCustom = false;
+      let isFrontOnly = false;
       if (item.skin) {
         try {
           const l = await loadImage(item.skin.dataUrl, { cors: false });
           isCustom = item.skin.isCustomImage === true;
-          if (isCustom || describeSkin(l.width, l.height).valid) {
+          isFrontOnly = item.skin.frontOnly === true;
+          if (isCustom || describeSkin(l.width, l.height, isFrontOnly).valid) {
             loaded = l;
           }
         } catch {
@@ -1250,10 +1280,11 @@ export async function applyPreset(id: string): Promise<void> {
       if (!loaded) {
         loaded = await getFallbackSkin();
         isCustom = false;
+        isFrontOnly = false;
         fallbackCount += 1;
       }
       if (loaded) {
-        ready.push({ layer: item, loaded, isCustom });
+        ready.push({ layer: item, loaded, isCustom, isFrontOnly });
       }
     }
 
@@ -1262,7 +1293,7 @@ export async function applyPreset(id: string): Promise<void> {
     state.layers.length = 0;
     for (const item of ready) {
       const skinId = createId('skin');
-      registerSkin(item.loaded, 'preset', preset.name, '预设', skinId, false, item.isCustom);
+      registerSkin(item.loaded, 'preset', preset.name, '预设', skinId, false, item.isCustom, item.isFrontOnly);
       const size = clampSize(item.layer.size);
       const placed = clampLayerToDocument(
         { x: item.layer.x, y: item.layer.y, size },

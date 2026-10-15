@@ -34,6 +34,7 @@ export interface PresetSkin {
   width: number;
   height: number;
   isCustomImage?: boolean;
+  frontOnly?: boolean;
 }
 
 export interface PresetLayer {
@@ -98,11 +99,13 @@ function normalizeSkin(raw: unknown): PresetSkin | null {
   const record = isRecord(raw) ? raw : null;
   if (!record || !isSafeImageDataUrl(record.dataUrl)) return null;
   const isCustomImage = record.isCustomImage === true;
+  const frontOnly = record.frontOnly === true;
   return {
     dataUrl: record.dataUrl,
     width: Math.round(clampNumber(record.width, 8, 8192, 64)),
     height: Math.round(clampNumber(record.height, 8, 8192, 64)),
     ...(isCustomImage ? { isCustomImage: true } : {}),
+    ...(frontOnly ? { frontOnly: true } : {}),
   };
 }
 
