@@ -25,7 +25,7 @@ export const MAX_PRESETS = 48;
 /** 单个内嵌皮肤 data URI 的长度上限（字符数） */
 export const MAX_SKIN_DATA_URL = 1_500_000;
 /** 一个预设最多保存多少个头像 */
-export const MAX_TEMPLATE_LAYERS = 64;
+export const MAX_TEMPLATE_LAYERS = 128;
 /** 坐标的合法范围：比任何画布都宽，真正的夹取交给套用时的当前画布 */
 export const MAX_LAYER_POSITION = 32768;
 
