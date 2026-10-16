@@ -36,6 +36,7 @@ import {
   scaleLayerBy,
   selectLayer,
   setMobilePanel,
+  setViewportSize,
   updateLayer,
 } from '../stores/editor';
 
@@ -658,10 +659,12 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(() => {
       const rect = element.getBoundingClientRect();
       wrapSize.value = { w: rect.width, h: rect.height };
+      setViewportSize(rect.width, rect.height);
     });
     resizeObserver.observe(element);
     const rect = element.getBoundingClientRect();
     wrapSize.value = { w: rect.width, h: rect.height };
+    setViewportSize(rect.width, rect.height);
   }
   window.addEventListener('keydown', onKeyDown);
   schedule();
